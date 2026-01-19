@@ -4,6 +4,18 @@
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
 
+/// Validate UTF-8 and check for NUL bytes.
+/// Uses stdlib's optimized UTF-8 validation combined with NUL check.
+#[inline]
+fn validate_utf8_no_nul(bytes: &[u8]) -> std::result::Result<&str, Error> {
+    // Check for NUL bytes first (stdlib uses SIMD for this)
+    if bytes.contains(&0) {
+        return Err(Error::NulCharacter);
+    }
+    // Use stdlib's optimized UTF-8 validation
+    Ok(std::str::from_utf8(bytes)?)
+}
+
 /// How to handle duplicate keys in objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DuplicateKeyMode {
@@ -453,13 +465,12 @@ impl<'a> Decoder<'a> {
         let len = type_code::short_string_len(tc);
         let bytes = self.read_bytes(len)?;
 
-        // Check for NUL first (cheap check)
-        if !self.config.allow_nul && bytes.contains(&0) {
-            return Err(Error::NulCharacter);
-        }
-
-        // Validate UTF-8 once and get the string
-        let s = std::str::from_utf8(bytes)?;
+        // Fused UTF-8 validation and NUL check in one pass
+        let s = if self.config.allow_nul {
+            std::str::from_utf8(bytes)?
+        } else {
+            validate_utf8_no_nul(bytes)?
+        };
 
         self.toggle_object_state();
         self.increment_element_count()?;
@@ -476,11 +487,12 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(length as usize)?;
 
         if !continuation {
-            // Single-chunk string - validate once and return borrowed slice
-            if !self.config.allow_nul && bytes.contains(&0) {
-                return Err(Error::NulCharacter);
-            }
-            let s = std::str::from_utf8(bytes)?;
+            // Single-chunk string - fused UTF-8 validation and NUL check
+            let s = if self.config.allow_nul {
+                std::str::from_utf8(bytes)?
+            } else {
+                validate_utf8_no_nul(bytes)?
+            };
             self.toggle_object_state();
             self.increment_element_count()?;
             return Ok(DecodedValue::String(s));
