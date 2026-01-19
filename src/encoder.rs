@@ -609,12 +609,10 @@ fn required_signed_bytes_min0(value: i64) -> usize {
 /// The overhead is 1 bit per byte, giving 7 payload bits per byte.
 #[inline]
 fn calc_length_extra_bytes(payload: u64) -> usize {
-    if payload == 0 {
-        return 0;
-    }
-    // Highest bit position (0-indexed from 0)
-    let highest_bit = 63 - payload.leading_zeros() as usize;
-    // Divide by 7 to get extra bytes needed
+    // Branchless version using saturating arithmetic.
+    // When payload is 0, leading_zeros() is 64, saturating_sub gives 0, and 0/7 = 0.
+    // For other values, this computes (highest_bit_position) / 7.
+    let highest_bit = 63usize.saturating_sub(payload.leading_zeros() as usize);
     highest_bit / 7
 }
 
