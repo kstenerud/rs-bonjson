@@ -254,6 +254,76 @@ impl<'a> Decoder<'a> {
     }
 
     // =========================================================================
+    // Shared read methods for numeric types
+    //
+    // These methods read and decode raw values without state tracking.
+    // Both checked and unchecked decode methods use these to avoid duplication.
+    // Marked #[inline(always)] to ensure zero overhead.
+    // =========================================================================
+
+    /// Read an unsigned integer of the given type code.
+    #[inline(always)]
+    fn read_unsigned_int(&mut self, tc: u8) -> Result<u64> {
+        let size = type_code::unsigned_int_size(tc);
+        let bytes = self.read_bytes(size)?;
+        let mut buf = [0u8; 8];
+        buf[..size].copy_from_slice(bytes);
+        Ok(u64::from_le_bytes(buf))
+    }
+
+    /// Read a signed integer of the given type code.
+    #[inline(always)]
+    fn read_signed_int(&mut self, tc: u8) -> Result<i64> {
+        let size = type_code::signed_int_size(tc);
+        let bytes = self.read_bytes(size)?;
+        let sign_bit = (bytes[size - 1] >> 7) & 1;
+        let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+        let mut buf = [fill; 8];
+        buf[..size].copy_from_slice(bytes);
+        Ok(i64::from_le_bytes(buf))
+    }
+
+    /// Read a bfloat16 value, checking for NaN/Infinity if configured.
+    #[inline(always)]
+    fn read_float16(&mut self) -> Result<f64> {
+        let bytes = self.read_bytes(2)?;
+        let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let f32_bits = u32::from(bits) << 16;
+        let value = f64::from(f32::from_bits(f32_bits));
+        self.check_float(value)?;
+        Ok(value)
+    }
+
+    /// Read a float32 value, checking for NaN/Infinity if configured.
+    #[inline(always)]
+    fn read_float32(&mut self) -> Result<f64> {
+        let bytes = self.read_bytes(4)?;
+        let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+        self.check_float(value)?;
+        Ok(value)
+    }
+
+    /// Read a float64 value, checking for NaN/Infinity if configured.
+    #[inline(always)]
+    fn read_float64(&mut self) -> Result<f64> {
+        let bytes = self.read_bytes(8)?;
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(bytes);
+        let value = f64::from_le_bytes(buf);
+        self.check_float(value)?;
+        Ok(value)
+    }
+
+    /// Check if a float value is allowed (NaN/Infinity check).
+    #[inline(always)]
+    fn check_float(&self, value: f64) -> Result<()> {
+        if !self.config.allow_nan_infinity && (value.is_nan() || value.is_infinite()) {
+            return Err(Error::InvalidData("NaN or Infinity not allowed".into()));
+        }
+        Ok(())
+    }
+
+    // =========================================================================
     // Unchecked methods for serde deserializer
     //
     // These methods skip container state tracking (depth counting, key/value
@@ -590,51 +660,29 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline]
+    #[inline]
     fn decode_unsigned_int_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
-        let size = type_code::unsigned_int_size(tc);
-        let bytes = self.read_bytes(size)?;
-        let mut buf = [0u8; 8];
-        buf[..size].copy_from_slice(bytes);
-        Ok(DecodedValue::UInt(u64::from_le_bytes(buf)))
+        Ok(DecodedValue::UInt(self.read_unsigned_int(tc)?))
     }
 
     #[inline]
     fn decode_signed_int_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
-        let size = type_code::signed_int_size(tc);
-        let bytes = self.read_bytes(size)?;
-        let sign_bit = (bytes[size - 1] >> 7) & 1;
-        let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
-        let mut buf = [fill; 8];
-        buf[..size].copy_from_slice(bytes);
-        Ok(DecodedValue::Int(i64::from_le_bytes(buf)))
+        Ok(DecodedValue::Int(self.read_signed_int(tc)?))
     }
 
     #[inline]
     fn decode_float16_unchecked(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(2)?;
-        let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let f32_bits = u32::from(bits) << 16;
-        let value = f64::from(f32::from_bits(f32_bits));
-        self.check_float(value)?;
-        Ok(DecodedValue::Float(value))
+        Ok(DecodedValue::Float(self.read_float16()?))
     }
 
     #[inline]
     fn decode_float32_unchecked(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(4)?;
-        let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
-        self.check_float(value)?;
-        Ok(DecodedValue::Float(value))
+        Ok(DecodedValue::Float(self.read_float32()?))
     }
 
     #[inline]
     fn decode_float64_unchecked(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(8)?;
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(bytes);
-        let value = f64::from_le_bytes(buf);
-        self.check_float(value)?;
-        Ok(DecodedValue::Float(value))
+        Ok(DecodedValue::Float(self.read_float64()?))
     }
 
     #[inline]
@@ -849,75 +897,38 @@ impl<'a> Decoder<'a> {
     }
 
     fn decode_unsigned_int(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
-        let size = type_code::unsigned_int_size(tc);
-        let bytes = self.read_bytes(size)?;
-
-        let mut buf = [0u8; 8];
-        buf[..size].copy_from_slice(bytes);
-        let value = u64::from_le_bytes(buf);
-
+        let value = self.read_unsigned_int(tc)?;
         self.toggle_object_state();
         self.increment_element_count()?;
         Ok(DecodedValue::UInt(value))
     }
 
     fn decode_signed_int(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
-        let size = type_code::signed_int_size(tc);
-        let bytes = self.read_bytes(size)?;
-
-        // Sign-extend the value
-        let sign_bit = (bytes[size - 1] >> 7) & 1;
-        let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
-        let mut buf = [fill; 8];
-        buf[..size].copy_from_slice(bytes);
-        let value = i64::from_le_bytes(buf);
-
+        let value = self.read_signed_int(tc)?;
         self.toggle_object_state();
         self.increment_element_count()?;
         Ok(DecodedValue::Int(value))
     }
 
     fn decode_float16(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(2)?;
-        let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
-
-        // bfloat16 is the upper 16 bits of a float32
-        let f32_bits = u32::from(bits) << 16;
-        let value = f64::from(f32::from_bits(f32_bits));
-
-        self.check_float(value)?;
+        let value = self.read_float16()?;
         self.toggle_object_state();
         self.increment_element_count()?;
         Ok(DecodedValue::Float(value))
     }
 
     fn decode_float32(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(4)?;
-        let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
-
-        self.check_float(value)?;
+        let value = self.read_float32()?;
         self.toggle_object_state();
         self.increment_element_count()?;
         Ok(DecodedValue::Float(value))
     }
 
     fn decode_float64(&mut self) -> Result<DecodedValue<'a>> {
-        let bytes = self.read_bytes(8)?;
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(bytes);
-        let value = f64::from_le_bytes(buf);
-
-        self.check_float(value)?;
+        let value = self.read_float64()?;
         self.toggle_object_state();
         self.increment_element_count()?;
         Ok(DecodedValue::Float(value))
-    }
-
-    fn check_float(&self, value: f64) -> Result<()> {
-        if !self.config.allow_nan_infinity && (value.is_nan() || value.is_infinite()) {
-            return Err(Error::InvalidData("NaN or Infinity not allowed".into()));
-        }
-        Ok(())
     }
 
     fn decode_big_number(&mut self) -> Result<DecodedValue<'a>> {
