@@ -1,0 +1,34 @@
+# Rust/Cargo build artifacts
+/target/
+**/*.rs.bk
+
+# Cargo.lock is included for libraries, but you may want to gitignore it
+# Uncomment the next line if this is an application rather than a library
+# Cargo.lock
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Profiling and debugging
+*.pdb
+*.dSYM/
+perf.data
+perf.data.old
+flamegraph.svg
+cachegrind.out.*
+callgrind.out.*
+
+# Coverage
+*.gcno
+*.gcda
+*.gcov
+tarpaulin-report.html
+coverage/
+
+# Benchmark artifacts
+criterion/

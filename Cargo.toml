@@ -1,0 +1,28 @@
+[package]
+name = "bonjson"
+version = "0.1.0"
+edition = "2021"
+authors = ["Karl Stenerud <kstenerud@gmail.com>"]
+description = "A high-performance BONJSON (Binary Object Notation for JSON) encoder and decoder"
+license = "MIT"
+repository = "https://github.com/kstenerud/bonjson"
+keywords = ["bonjson", "json", "binary", "serialization", "serde"]
+categories = ["encoding", "parser-implementations"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+criterion = "0.5"
+
+[[bench]]
+name = "comparison"
+harness = false
+
+[features]
+default = []
+
+[profile.release]
+lto = true
+codegen-units = 1
