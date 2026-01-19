@@ -1,13 +1,6 @@
 // ABOUTME: High-performance BONJSON binary encoder.
 // ABOUTME: Uses compiler intrinsics (leading_zeros) for efficient length field encoding.
 
-// Allow intentional casts for binary format encoding - the format requires direct type casting
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 
 use crate::error::{Error, Result};
 use crate::types::{type_code, BigNumber};
@@ -120,6 +113,8 @@ impl<W: Write> Encoder<W> {
 
     /// Encode a 64-bit float without state checks.
     #[inline]
+    #[allow(clippy::cast_possible_truncation)] // Intentional: f64 to i64 for whole number check
+    #[allow(clippy::cast_precision_loss)] // Intentional: i64 to f64 for round-trip comparison
     pub(crate) fn write_f64_unchecked(&mut self, value: f64) -> Result<()> {
         // Check for NaN and infinity
         if value.is_nan() || value.is_infinite() {
@@ -143,6 +138,7 @@ impl<W: Write> Encoder<W> {
 
     /// Encode a string without state checks.
     #[inline]
+    #[allow(clippy::cast_possible_truncation)] // len <= 15 checked before cast to u8
     pub(crate) fn write_str_unchecked(&mut self, value: &str) -> Result<()> {
         let bytes = value.as_bytes();
         let len = bytes.len();
@@ -260,6 +256,8 @@ impl<W: Write> Encoder<W> {
     /// Returns an error if:
     /// - Called when an object key is expected
     /// - The value is NaN or infinity (not allowed in BONJSON)
+    #[allow(clippy::cast_possible_truncation)] // Intentional: f64 to i64 for whole number check
+    #[allow(clippy::cast_precision_loss)] // Intentional: i64 to f64 for round-trip comparison
     pub fn write_f64(&mut self, value: f64) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -307,6 +305,7 @@ impl<W: Write> Encoder<W> {
     /// Returns an error if:
     /// - Called when an object key is expected
     /// - The exponent is out of the valid range (-0x800000 to 0x7fffff)
+    #[allow(clippy::cast_possible_truncation)] // sig_bytes and exp_bytes are <= 8, safe for u8
     pub fn write_big_number(&mut self, value: BigNumber) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -353,6 +352,7 @@ impl<W: Write> Encoder<W> {
     /// # Errors
     ///
     /// Returns an I/O error if writing fails.
+    #[allow(clippy::cast_possible_truncation)] // len <= 15 checked before cast to u8
     pub fn write_str(&mut self, value: &str) -> Result<()> {
         let bytes = value.as_bytes();
         let len = bytes.len();
@@ -446,6 +446,7 @@ impl<W: Write> Encoder<W> {
     // -------------------------------------------------------------------------
 
     /// Write an unsigned integer using the optimal encoding.
+    #[allow(clippy::cast_possible_truncation)] // value <= 100 checked; byte_count <= 8
     fn write_unsigned_int(&mut self, value: u64) -> Result<()> {
         // Small integer range: 0-100
         if value <= 100 {
@@ -468,6 +469,8 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Write a signed integer using the optimal encoding.
+    #[allow(clippy::cast_possible_truncation)] // -100..=100 checked; byte_count <= 8
+    #[allow(clippy::cast_sign_loss)] // Intentional: i64 to u8 for smallint, i64 to u64 when positive
     fn write_signed_int(&mut self, value: i64) -> Result<()> {
         // Small integer range: -100 to 100
         if (-100..=100).contains(&value) {
@@ -494,6 +497,7 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Write a float using the optimal encoding (16, 32, or 64 bit).
+    #[allow(clippy::cast_possible_truncation)] // Intentional: testing if f64 fits in f32
     fn write_float(&mut self, value: f64) -> Result<()> {
         let f32_val = value as f32;
         let f32_bits = f32_val.to_bits();

@@ -1,13 +1,6 @@
 // ABOUTME: High-performance BONJSON binary decoder.
 // ABOUTME: Uses compiler intrinsics (trailing_zeros) for efficient length field decoding.
 
-// Allow intentional casts for binary format decoding - the format requires direct type casting
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
@@ -419,6 +412,7 @@ impl<'a> Decoder<'a> {
 
     /// Decode an i64 directly, without going through `DecodedValue`.
     #[inline]
+    #[allow(clippy::cast_possible_wrap)] // Intentional: u8 to i8 for negative smallints, u64 to i64 after range check
     pub(crate) fn decode_i64_direct(&mut self) -> Result<i64> {
         let tc = self.read_byte()?;
         match tc {
@@ -497,6 +491,7 @@ impl<'a> Decoder<'a> {
 
     /// Decode a string directly, without going through `DecodedValue`.
     #[inline]
+    #[allow(clippy::cast_possible_truncation)] // Length checked against max_string_length before cast
     pub(crate) fn decode_str_direct(&mut self) -> Result<&'a str> {
         let tc = self.read_byte()?;
         match tc {
@@ -545,6 +540,8 @@ impl<'a> Decoder<'a> {
 
     /// Decode an f64 directly, without going through `DecodedValue`.
     #[inline]
+    #[allow(clippy::cast_possible_wrap)] // Intentional: u8 to i8 for negative smallints
+    #[allow(clippy::cast_precision_loss)] // Intentional: i64/u64 to f64 for numeric conversion
     pub(crate) fn decode_f64_direct(&mut self) -> Result<f64> {
         let tc = self.read_byte()?;
         match tc {
@@ -601,6 +598,7 @@ impl<'a> Decoder<'a> {
 
     /// Decode a value given its type code, without state tracking.
     #[inline]
+    #[allow(clippy::cast_possible_wrap)] // Intentional: u8 to i8 for negative smallints
     fn decode_value_unchecked_with_type(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
         match tc {
             // Small integers: 0-100
@@ -702,6 +700,7 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline]
+    #[allow(clippy::cast_possible_truncation)] // Length checked against max_string_length before cast
     fn decode_long_string_unchecked(&mut self) -> Result<DecodedValue<'a>> {
         let pos_before_length = self.pos;
         let (length, continuation) = self.decode_length_field()?;
@@ -817,6 +816,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// Decode a value given its type code.
+    #[allow(clippy::cast_possible_wrap)] // Intentional: u8 to i8 for negative smallints
     fn decode_value_with_type(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
         match tc {
             // Small integers: 0-100
@@ -1027,6 +1027,7 @@ impl<'a> Decoder<'a> {
         Ok(DecodedValue::String(s))
     }
 
+    #[allow(clippy::cast_possible_truncation)] // Lengths checked against max_string_length before cast
     fn decode_long_string(&mut self) -> Result<DecodedValue<'a>> {
         let (length, continuation) = self.decode_length_field()?;
 

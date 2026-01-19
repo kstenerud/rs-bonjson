@@ -1,13 +1,6 @@
 // ABOUTME: Defines BONJSON type codes and the BigNumber type.
 // ABOUTME: Type codes map directly to the BONJSON specification byte values.
 
-// Allow intentional casts for BigNumber numeric conversions
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 
 /// Type codes for BONJSON values.
 /// These match the BONJSON specification exactly.
@@ -78,7 +71,9 @@ pub mod type_code {
 
     /// Decode a small integer type code to its value
     #[inline]
-    #[must_use] pub const fn small_int_value(code: u8) -> i8 {
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)] // Intentional: BONJSON small ints use two's complement
+    pub const fn small_int_value(code: u8) -> i8 {
         code as i8
     }
 
@@ -184,7 +179,10 @@ impl BigNumber {
 
     /// Try to convert this `BigNumber` to an i64.
     /// Returns None if the value cannot be represented exactly.
-    #[must_use] pub fn to_i64(&self) -> Option<i64> {
+    #[must_use]
+    #[allow(clippy::cast_sign_loss)] // exponent >= 0 checked above
+    #[allow(clippy::cast_possible_wrap)] // checked_mul returns None on overflow
+    pub fn to_i64(&self) -> Option<i64> {
         if self.exponent < 0 {
             return None;
         }
@@ -204,7 +202,9 @@ impl BigNumber {
 
     /// Try to convert this `BigNumber` to a u64.
     /// Returns None if the value cannot be represented exactly.
-    #[must_use] pub fn to_u64(&self) -> Option<u64> {
+    #[must_use]
+    #[allow(clippy::cast_sign_loss)] // exponent >= 0 checked above
+    pub fn to_u64(&self) -> Option<u64> {
         if self.sign < 0 && self.significand != 0 {
             return None;
         }
@@ -221,7 +221,9 @@ impl BigNumber {
 
     /// Try to convert this `BigNumber` to an f64.
     /// This may lose precision for very large or very precise numbers.
-    #[must_use] pub fn to_f64(&self) -> f64 {
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Documented: may lose precision
+    pub fn to_f64(&self) -> f64 {
         let sign = if self.sign < 0 { -1.0 } else { 1.0 };
         let significand = self.significand as f64;
         let exponent = 10.0f64.powi(self.exponent);

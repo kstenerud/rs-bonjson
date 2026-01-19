@@ -1,13 +1,6 @@
 // ABOUTME: Dynamic JSON value type for BONJSON.
 // ABOUTME: Similar to serde_json::Value but includes BigNumber for lossless representation.
 
-// Allow intentional casts for numeric conversions between Value types
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 
 use crate::types::BigNumber;
 use std::collections::BTreeMap;
@@ -83,7 +76,11 @@ impl Value {
     }
 
     /// If this is an integer, returns the value as i64.
-    #[must_use] pub fn as_i64(&self) -> Option<i64> {
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)] // try_from check ensures no wrap
+    #[allow(clippy::cast_precision_loss)] // Intentional: range check uses f64
+    #[allow(clippy::cast_possible_truncation)] // Range checked before cast
+    pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
             Value::UInt(n) if i64::try_from(*n).is_ok() => Some(*n as i64),
@@ -96,7 +93,11 @@ impl Value {
     }
 
     /// If this is an integer, returns the value as u64.
-    #[must_use] pub fn as_u64(&self) -> Option<u64> {
+    #[must_use]
+    #[allow(clippy::cast_sign_loss)] // >= 0 checked before cast
+    #[allow(clippy::cast_precision_loss)] // Intentional: range check uses f64
+    #[allow(clippy::cast_possible_truncation)] // Range checked before cast
+    pub fn as_u64(&self) -> Option<u64> {
         match self {
             Value::UInt(n) => Some(*n),
             Value::Int(n) if *n >= 0 => Some(*n as u64),
@@ -109,7 +110,9 @@ impl Value {
     }
 
     /// If this is a number, returns the value as f64.
-    #[must_use] pub fn as_f64(&self) -> Option<f64> {
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)] // Intentional: int-to-float conversion may lose precision
+    pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Float(f) => Some(*f),
             Value::Int(n) => Some(*n as f64),
@@ -288,6 +291,7 @@ impl From<u32> for Value {
 }
 
 impl From<u64> for Value {
+    #[allow(clippy::cast_possible_wrap)] // try_from check ensures no wrap
     fn from(n: u64) -> Self {
         if i64::try_from(n).is_ok() {
             Value::Int(n as i64)
