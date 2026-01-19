@@ -102,9 +102,17 @@ The project uses a layered architecture:
 
 ### Known Limitations
 - BigNumber significands limited to 8 bytes (u64)
-- Multi-chunk strings allocate (use `Box::leak` for borrowed return type compatibility)
+- Multi-chunk strings use `Box::leak` to return borrowed references from owned data.
+  This only affects strings from external BONJSON sources that use chunking for streaming;
+  the encoder in this crate always produces single-chunk strings, so in a closed system
+  this code path is never executed.
 - NaN/Infinity stringify mode not implemented
 - Invalid UTF-8 replace/delete modes not implemented
+
+### Performance Considerations
+- For file/network I/O, wrap writers in `BufWriter` - the encoder writes small chunks
+  (often single bytes) directly to the writer
+- `to_vec` pre-allocates 128 bytes; for large payloads, use `to_writer` with a pre-sized Vec
 
 ## Testing
 

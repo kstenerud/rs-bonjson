@@ -16,6 +16,13 @@ use std::io::Write;
 /// A BONJSON encoder that writes to a byte buffer.
 ///
 /// The encoder tracks container state to ensure well-formed output.
+///
+/// # Performance Note
+///
+/// The encoder writes small chunks (often single bytes) directly to the writer.
+/// For file or network I/O, wrap your writer in [`std::io::BufWriter`] to avoid
+/// excessive syscall overhead. For in-memory writers like `Vec<u8>`, no buffering
+/// is needed.
 pub struct Encoder<W: Write> {
     writer: W,
     /// Stack of container states: true = object (expecting key/value alternation)

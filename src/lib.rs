@@ -111,11 +111,24 @@ use std::io::Write;
 /// assert_eq!(bytes, vec![0x2a]); // Small integer 42
 /// ```
 ///
+/// # Performance Note
+///
+/// This function pre-allocates 128 bytes, which is a reasonable default for
+/// small-to-medium payloads. For large values where you can estimate the
+/// serialized size, use [`to_writer`] with a pre-sized `Vec` for better performance:
+///
+/// ```rust
+/// use bonjson::to_writer;
+///
+/// let large_data = vec![0i32; 10000];
+/// let mut buf = Vec::with_capacity(large_data.len() * 2); // Estimate ~2 bytes per element
+/// to_writer(&mut buf, &large_data).unwrap();
+/// ```
+///
 /// # Errors
 ///
 /// Returns an error if serialization fails (e.g., NaN/infinity floats).
 pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    // Pre-allocate to avoid reallocations for small-medium payloads
     let mut buf = Vec::with_capacity(128);
     to_writer(&mut buf, value)?;
     Ok(buf)
@@ -131,6 +144,24 @@ pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 /// let mut buf = Vec::new();
 /// to_writer(&mut buf, &"hello").unwrap();
 /// ```
+///
+/// # Performance Note
+///
+/// The encoder writes small chunks (often single bytes) directly to the writer.
+/// For file or network I/O, wrap your writer in [`std::io::BufWriter`] to avoid
+/// excessive syscall overhead:
+///
+/// ```rust
+/// use std::io::BufWriter;
+/// use std::fs::File;
+/// use bonjson::to_writer;
+///
+/// let file = File::create("data.bonjson").unwrap();
+/// let buffered = BufWriter::new(file);
+/// to_writer(buffered, &42i32).unwrap();
+/// ```
+///
+/// For in-memory writers like `Vec<u8>`, no buffering is needed.
 ///
 /// # Errors
 ///

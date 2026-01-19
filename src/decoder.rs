@@ -25,11 +25,16 @@ fn is_short_ascii_no_nul(bytes: &[u8]) -> bool {
 }
 
 /// Validate UTF-8 and check for NUL bytes.
-/// Uses stdlib's SIMD-optimized functions (two passes but very fast).
+///
+/// This uses two separate passes over the data, which may seem inefficient, but is
+/// actually faster than a single-pass approach because:
+/// 1. Stdlib's `contains()` and `from_utf8()` use highly optimized architecture-specific
+///    SIMD implementations (SSE2/AVX2 on x86, NEON on ARM)
+/// 2. Replicating these optimizations in a single-pass NUL+UTF-8 check would require
+///    massive code bloat and platform-specific assembly
+/// 3. Two SIMD-accelerated passes over cached data beats one scalar pass
 #[inline]
 fn validate_utf8_no_nul(bytes: &[u8]) -> std::result::Result<&str, Error> {
-    // Stdlib's contains() and from_utf8() both use SIMD internally.
-    // Even with two passes, this is faster than any single-pass scalar approach.
     if bytes.contains(&0) {
         return Err(Error::NulCharacter);
     }
@@ -1063,7 +1068,16 @@ impl<'a> Decoder<'a> {
         self.increment_element_count()?;
 
         // We need to return an owned string, but DecodedValue uses borrowed strings.
-        // Leak the allocation. The scratch buffer itself is reused for the next string.
+        // Leak the allocation so we can return a &'a str.
+        //
+        // Why this is acceptable:
+        // 1. This code path only triggers for MULTI-CHUNK strings (continuation bit set)
+        // 2. The encoder in this crate always produces SINGLE-CHUNK strings
+        // 3. Multi-chunk strings only come from external BONJSON sources that use chunking
+        //    for streaming large strings
+        // 4. In a closed system using only this codec, this path is never executed
+        // 5. For systems that do receive external chunked strings, the leak is a known
+        //    trade-off to avoid a more complex lifetime design in DecodedValue
         Ok(DecodedValue::String(Box::leak(owned)))
     }
 
