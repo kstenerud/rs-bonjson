@@ -58,6 +58,102 @@ impl<W: Write> Encoder<W> {
         }
     }
 
+    // =========================================================================
+    // Unchecked methods for serde serializer (skips state validation)
+    // These are safe to use when the caller guarantees correct call order.
+    // =========================================================================
+
+    /// Encode a null value without state checks.
+    #[inline]
+    pub(crate) fn write_null_unchecked(&mut self) -> Result<()> {
+        self.write_byte(type_code::NULL)
+    }
+
+    /// Encode a boolean value without state checks.
+    #[inline]
+    pub(crate) fn write_bool_unchecked(&mut self, value: bool) -> Result<()> {
+        self.write_byte(if value { type_code::TRUE } else { type_code::FALSE })
+    }
+
+    /// Encode an unsigned integer without state checks.
+    #[inline]
+    pub(crate) fn write_u64_unchecked(&mut self, value: u64) -> Result<()> {
+        self.write_unsigned_int(value)
+    }
+
+    /// Encode a signed integer without state checks.
+    #[inline]
+    pub(crate) fn write_i64_unchecked(&mut self, value: i64) -> Result<()> {
+        self.write_signed_int(value)
+    }
+
+    /// Encode a 32-bit float without state checks.
+    #[inline]
+    pub(crate) fn write_f32_unchecked(&mut self, value: f32) -> Result<()> {
+        self.write_f64_unchecked(value as f64)
+    }
+
+    /// Encode a 64-bit float without state checks.
+    #[inline]
+    pub(crate) fn write_f64_unchecked(&mut self, value: f64) -> Result<()> {
+        // Check for NaN and infinity
+        if value.is_nan() || value.is_infinite() {
+            return Err(Error::InvalidData("NaN and Infinity are not allowed".into()));
+        }
+
+        // Check for negative zero - must be encoded as float, not integer
+        if value == 0.0 && value.is_sign_negative() {
+            return self.write_float(value);
+        }
+
+        // Try to encode as integer if it's a whole number
+        let as_int = value as i64;
+        #[allow(clippy::float_cmp)]
+        if (as_int as f64) == value {
+            return self.write_signed_int(as_int);
+        }
+
+        self.write_float(value)
+    }
+
+    /// Encode a string without state checks.
+    #[inline]
+    pub(crate) fn write_str_unchecked(&mut self, value: &str) -> Result<()> {
+        let bytes = value.as_bytes();
+        let len = bytes.len();
+
+        if len <= 15 {
+            self.write_byte(type_code::STRING0 + len as u8)?;
+            self.write_bytes(bytes)?;
+        } else {
+            self.write_byte(type_code::STRING_LONG)?;
+            self.write_length_field(len as u64, false)?;
+            self.write_bytes(bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Begin an array without state checks.
+    /// Note: Does not track container state - caller must ensure correct nesting.
+    #[inline]
+    pub(crate) fn begin_array_unchecked(&mut self) -> Result<()> {
+        self.write_byte(type_code::ARRAY_START)
+    }
+
+    /// Begin an object without state checks.
+    /// Note: Does not track container state - caller must ensure correct nesting.
+    #[inline]
+    pub(crate) fn begin_object_unchecked(&mut self) -> Result<()> {
+        self.write_byte(type_code::OBJECT_START)
+    }
+
+    /// End container without state checks.
+    /// Note: Does not track container state - caller must ensure correct nesting.
+    #[inline]
+    pub(crate) fn end_container_unchecked(&mut self) -> Result<()> {
+        self.write_byte(type_code::CONTAINER_END)
+    }
+
     /// Write a single byte.
     #[inline]
     fn write_byte(&mut self, byte: u8) -> Result<()> {

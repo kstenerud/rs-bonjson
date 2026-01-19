@@ -30,70 +30,70 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<()> {
-        self.encoder.write_bool(v)
+        self.encoder.write_bool_unchecked(v)
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
-        self.encoder.write_i64(v as i64)
+        self.encoder.write_i64_unchecked(v as i64)
     }
 
     fn serialize_i16(self, v: i16) -> Result<()> {
-        self.encoder.write_i64(v as i64)
+        self.encoder.write_i64_unchecked(v as i64)
     }
 
     fn serialize_i32(self, v: i32) -> Result<()> {
-        self.encoder.write_i64(v as i64)
+        self.encoder.write_i64_unchecked(v as i64)
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
-        self.encoder.write_i64(v)
+        self.encoder.write_i64_unchecked(v)
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
-        self.encoder.write_u64(v as u64)
+        self.encoder.write_u64_unchecked(v as u64)
     }
 
     fn serialize_u16(self, v: u16) -> Result<()> {
-        self.encoder.write_u64(v as u64)
+        self.encoder.write_u64_unchecked(v as u64)
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        self.encoder.write_u64(v as u64)
+        self.encoder.write_u64_unchecked(v as u64)
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        self.encoder.write_u64(v)
+        self.encoder.write_u64_unchecked(v)
     }
 
     fn serialize_f32(self, v: f32) -> Result<()> {
-        self.encoder.write_f32(v)
+        self.encoder.write_f32_unchecked(v)
     }
 
     fn serialize_f64(self, v: f64) -> Result<()> {
-        self.encoder.write_f64(v)
+        self.encoder.write_f64_unchecked(v)
     }
 
     fn serialize_char(self, v: char) -> Result<()> {
         let mut buf = [0u8; 4];
         let s = v.encode_utf8(&mut buf);
-        self.encoder.write_str(s)
+        self.encoder.write_str_unchecked(s)
     }
 
     fn serialize_str(self, v: &str) -> Result<()> {
-        self.encoder.write_str(v)
+        self.encoder.write_str_unchecked(v)
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
         // Encode bytes as an array of integers
-        self.encoder.begin_array()?;
+        self.encoder.begin_array_unchecked()?;
         for &byte in v {
-            self.encoder.write_u64(byte as u64)?;
+            self.encoder.write_u64_unchecked(byte as u64)?;
         }
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 
     fn serialize_none(self) -> Result<()> {
-        self.encoder.write_null()
+        self.encoder.write_null_unchecked()
     }
 
     fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<()> {
@@ -101,11 +101,11 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
     }
 
     fn serialize_unit(self) -> Result<()> {
-        self.encoder.write_null()
+        self.encoder.write_null_unchecked()
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<()> {
-        self.encoder.write_null()
+        self.encoder.write_null_unchecked()
     }
 
     fn serialize_unit_variant(
@@ -114,7 +114,7 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         _variant_index: u32,
         variant: &'static str,
     ) -> Result<()> {
-        self.encoder.write_str(variant)
+        self.encoder.write_str_unchecked(variant)
     }
 
     fn serialize_newtype_struct<T: ?Sized + Serialize>(
@@ -132,19 +132,19 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         variant: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.encoder.begin_object()?;
-        self.encoder.write_str(variant)?;
+        self.encoder.begin_object_unchecked()?;
+        self.encoder.write_str_unchecked(variant)?;
         value.serialize(&mut *self)?;
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.encoder.begin_array()?;
+        self.encoder.begin_array_unchecked()?;
         Ok(self)
     }
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
-        self.encoder.begin_array()?;
+        self.encoder.begin_array_unchecked()?;
         Ok(self)
     }
 
@@ -153,7 +153,7 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         _name: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        self.encoder.begin_array()?;
+        self.encoder.begin_array_unchecked()?;
         Ok(self)
     }
 
@@ -164,19 +164,19 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.encoder.begin_object()?;
-        self.encoder.write_str(variant)?;
-        self.encoder.begin_array()?;
+        self.encoder.begin_object_unchecked()?;
+        self.encoder.write_str_unchecked(variant)?;
+        self.encoder.begin_array_unchecked()?;
         Ok(self)
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        self.encoder.begin_object()?;
+        self.encoder.begin_object_unchecked()?;
         Ok(self)
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
-        self.encoder.begin_object()?;
+        self.encoder.begin_object_unchecked()?;
         Ok(self)
     }
 
@@ -187,9 +187,9 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.encoder.begin_object()?;
-        self.encoder.write_str(variant)?;
-        self.encoder.begin_object()?;
+        self.encoder.begin_object_unchecked()?;
+        self.encoder.write_str_unchecked(variant)?;
+        self.encoder.begin_object_unchecked()?;
         Ok(self)
     }
 }
@@ -203,7 +203,7 @@ impl<'a, W: Write> ser::SerializeSeq for &mut Serializer<'a, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 }
 
@@ -216,7 +216,7 @@ impl<'a, W: Write> ser::SerializeTuple for &mut Serializer<'a, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 }
 
@@ -229,7 +229,7 @@ impl<'a, W: Write> ser::SerializeTupleStruct for &mut Serializer<'a, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 }
 
@@ -242,8 +242,8 @@ impl<'a, W: Write> ser::SerializeTupleVariant for &mut Serializer<'a, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()?; // Close array
-        self.encoder.end_container() // Close object
+        self.encoder.end_container_unchecked()?; // Close array
+        self.encoder.end_container_unchecked() // Close object
     }
 }
 
@@ -260,7 +260,7 @@ impl<'a, W: Write> ser::SerializeMap for &mut Serializer<'a, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 }
 
@@ -273,12 +273,12 @@ impl<'a, W: Write> ser::SerializeStruct for &mut Serializer<'a, W> {
         key: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.encoder.write_str(key)?;
+        self.encoder.write_str_unchecked(key)?;
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()
+        self.encoder.end_container_unchecked()
     }
 }
 
@@ -291,13 +291,13 @@ impl<'a, W: Write> ser::SerializeStructVariant for &mut Serializer<'a, W> {
         key: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.encoder.write_str(key)?;
+        self.encoder.write_str_unchecked(key)?;
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container()?; // Close inner object
-        self.encoder.end_container() // Close outer object
+        self.encoder.end_container_unchecked()?; // Close inner object
+        self.encoder.end_container_unchecked() // Close outer object
     }
 }
 
@@ -318,7 +318,7 @@ impl<'a, 'b, W: Write> ser::Serializer for MapKeySerializer<'a, 'b, W> {
     type SerializeStructVariant = ser::Impossible<(), Error>;
 
     fn serialize_str(self, v: &str) -> Result<()> {
-        self.ser.encoder.write_str(v)
+        self.ser.encoder.write_str_unchecked(v)
     }
 
     // For integer keys, convert to string

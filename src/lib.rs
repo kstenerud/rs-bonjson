@@ -98,7 +98,8 @@ use std::io::Write;
 /// assert_eq!(bytes, vec![0x2a]); // Small integer 42
 /// ```
 pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
+    // Pre-allocate to avoid reallocations for small-medium payloads
+    let mut buf = Vec::with_capacity(128);
     to_writer(&mut buf, value)?;
     Ok(buf)
 }
