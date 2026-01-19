@@ -660,7 +660,6 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline]
-    #[inline]
     fn decode_unsigned_int_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
         Ok(DecodedValue::UInt(self.read_unsigned_int(tc)?))
     }
