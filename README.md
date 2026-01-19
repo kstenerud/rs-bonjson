@@ -214,4 +214,4 @@ let config = DecoderConfig {
 
 ## License
 
-See LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) for details.
