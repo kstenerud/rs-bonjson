@@ -5,11 +5,9 @@ use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
 
 /// Check if all bytes are ASCII (1-127, no NUL or high bytes).
-/// For short strings, this is faster than full UTF-8 validation.
+/// For short strings (≤16 bytes), inline loop is faster than function calls.
 #[inline]
 fn is_short_ascii_no_nul(bytes: &[u8]) -> bool {
-    // Only efficient for short strings (up to 16 bytes)
-    // For longer strings, the full validation is likely faster
     for &b in bytes {
         if b == 0 || b >= 128 {
             return false;
@@ -19,14 +17,14 @@ fn is_short_ascii_no_nul(bytes: &[u8]) -> bool {
 }
 
 /// Validate UTF-8 and check for NUL bytes.
-/// Uses stdlib's optimized UTF-8 validation combined with NUL check.
+/// Uses stdlib's SIMD-optimized functions (two passes but very fast).
 #[inline]
 fn validate_utf8_no_nul(bytes: &[u8]) -> std::result::Result<&str, Error> {
-    // Check for NUL bytes first (stdlib uses SIMD for this)
+    // Stdlib's contains() and from_utf8() both use SIMD internally.
+    // Even with two passes, this is faster than any single-pass scalar approach.
     if bytes.contains(&0) {
         return Err(Error::NulCharacter);
     }
-    // Use stdlib's optimized UTF-8 validation
     Ok(std::str::from_utf8(bytes)?)
 }
 
@@ -422,12 +420,7 @@ impl<'a> Decoder<'a> {
                 }
                 let bytes = self.read_bytes(length as usize)?;
                 if !continuation {
-                    // Fast path only for short strings (≤32 bytes)
-                    // Longer strings should use stdlib's optimized validation
-                    if !self.config.allow_nul && bytes.len() <= 32 && is_short_ascii_no_nul(bytes) {
-                        // SAFETY: ASCII bytes are always valid UTF-8
-                        return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
-                    }
+                    // Use SIMD-accelerated validation for all string sizes
                     return if self.config.allow_nul {
                         Ok(std::str::from_utf8(bytes)?)
                     } else {
