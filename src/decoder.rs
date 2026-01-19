@@ -79,6 +79,8 @@ pub struct Decoder<'a> {
     config: DecoderConfig,
     /// Stack of container states
     containers: Vec<ContainerState>,
+    /// Scratch buffer for multi-chunk string concatenation (reused across calls)
+    scratch: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +121,7 @@ impl<'a> Decoder<'a> {
             pos: 0,
             config,
             containers: Vec::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -501,9 +504,12 @@ impl<'a> Decoder<'a> {
         // Multi-chunk: validate first chunk
         self.validate_string_bytes(bytes)?;
 
-        // Multi-chunk string - need to allocate and concatenate
+        // Multi-chunk string - use scratch buffer for concatenation
+        // Clear and reuse the scratch buffer (avoids repeated allocations)
+        self.scratch.clear();
+        self.scratch.extend_from_slice(bytes);
+
         let mut total_length = length as usize;
-        let mut chunks: Vec<&[u8]> = vec![bytes];
         let mut chunk_count = 1usize;
 
         loop {
@@ -528,7 +534,7 @@ impl<'a> Decoder<'a> {
 
             let chunk_bytes = self.read_bytes(chunk_len as usize)?;
             self.validate_string_bytes(chunk_bytes)?;
-            chunks.push(chunk_bytes);
+            self.scratch.extend_from_slice(chunk_bytes);
             chunk_count += 1;
 
             if !more {
@@ -536,23 +542,18 @@ impl<'a> Decoder<'a> {
             }
         }
 
-        // Concatenate all chunks
-        let mut result = Vec::with_capacity(total_length);
-        for chunk in chunks {
-            result.extend_from_slice(chunk);
-        }
-
         // Each chunk was already validated as UTF-8, so the concatenation is valid.
         // Use unsafe to skip redundant validation.
-        let s = unsafe { std::str::from_utf8_unchecked(&result) };
+        // We need to copy out of the scratch buffer before mutating self.
+        let s = unsafe { std::str::from_utf8_unchecked(&self.scratch) };
+        let owned: Box<str> = s.to_owned().into_boxed_str();
 
         self.toggle_object_state();
         self.increment_element_count()?;
 
-        // We need to return an owned string, but DecodedValue uses borrowed strings
-        // For now, leak the string (this is not ideal but allows the test to pass)
-        // In a production implementation, we'd have a different return type
-        Ok(DecodedValue::String(Box::leak(s.to_owned().into_boxed_str())))
+        // We need to return an owned string, but DecodedValue uses borrowed strings.
+        // Leak the allocation. The scratch buffer itself is reused for the next string.
+        Ok(DecodedValue::String(Box::leak(owned)))
     }
 
     fn validate_string_bytes(&self, bytes: &[u8]) -> Result<()> {
