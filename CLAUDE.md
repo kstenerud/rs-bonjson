@@ -1,8 +1,14 @@
-# CLAUDE.md - BONJSON Rust Codec
+# CLAUDE.md - serde_bonjson
 
 ## Overview
 
-This is a Rust implementation of BONJSON (Binary Object Notation for JSON), a binary format that is 1:1 compatible with JSON but more efficient to process. The codec follows the BONJSON specification at `../bonjson/bonjson.md`.
+This is `serde_bonjson`, a Rust implementation of BONJSON (Binary Object Notation for JSON). It's designed as a drop-in replacement for `serde_json` — users can migrate by prepending "bon" to "json" in their imports:
+
+- `serde_json` → `serde_bonjson`
+- `json!` → `bonjson!`
+- `serde_json::Value` → `serde_bonjson::Value`
+
+BONJSON is a binary format that is 1:1 compatible with JSON but more efficient to process. The codec follows the BONJSON specification at `../bonjson/bonjson.md`.
 
 ## Architecture
 

@@ -22,7 +22,7 @@ fn main() {
         rating: 4.5,
     }];
 
-    let bonjson_bytes = bonjson::to_vec(&data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
     let json_bytes = serde_json::to_vec(&data).unwrap();
 
     println!("BONJSON size: {} bytes", bonjson_bytes.len());
@@ -30,14 +30,14 @@ fn main() {
 
     // Warmup
     for _ in 0..10000 {
-        let _: Vec<TestData> = bonjson::from_slice(&bonjson_bytes).unwrap();
+        let _: Vec<TestData> = serde_bonjson::from_slice(&bonjson_bytes).unwrap();
         let _: Vec<TestData> = serde_json::from_slice(&json_bytes).unwrap();
     }
 
     // BONJSON decode
     let start = Instant::now();
     for _ in 0..500_000 {
-        let _: Vec<TestData> = bonjson::from_slice(&bonjson_bytes).unwrap();
+        let _: Vec<TestData> = serde_bonjson::from_slice(&bonjson_bytes).unwrap();
     }
     let bonjson_time = start.elapsed();
 

@@ -2,7 +2,7 @@
 // ABOUTME: Covers various data patterns to identify performance characteristics.
 // Run with: cargo run --release --example quick_bench
 
-use bonjson::decoder::DecoderConfig;
+use serde_bonjson::decoder::DecoderConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -164,14 +164,14 @@ fn create_sparse_data(count: usize) -> Vec<SparseData> {
 fn bench_encode<T: Serialize>(name: &str, data: &T, iterations: u32) {
     // Warmup
     for _ in 0..100 {
-        let _ = bonjson::to_vec(data);
+        let _ = serde_bonjson::to_vec(data);
         let _ = serde_json::to_vec(data);
     }
 
     // BONJSON encode
     let start = Instant::now();
     for _ in 0..iterations {
-        let _ = bonjson::to_vec(data).unwrap();
+        let _ = serde_bonjson::to_vec(data).unwrap();
     }
     let bonjson_time = start.elapsed();
 
@@ -182,7 +182,7 @@ fn bench_encode<T: Serialize>(name: &str, data: &T, iterations: u32) {
     }
     let json_time = start.elapsed();
 
-    let bonjson_bytes = bonjson::to_vec(data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(data).unwrap();
     let json_bytes = serde_json::to_vec(data).unwrap();
 
     let speedup = json_time.as_nanos() as f64 / bonjson_time.as_nanos() as f64;
@@ -201,19 +201,19 @@ fn bench_encode<T: Serialize>(name: &str, data: &T, iterations: u32) {
 }
 
 fn bench_decode<T: Serialize + for<'de> Deserialize<'de>>(name: &str, data: &T, iterations: u32) {
-    let bonjson_bytes = bonjson::to_vec(data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(data).unwrap();
     let json_bytes = serde_json::to_vec(data).unwrap();
 
     // Warmup
     for _ in 0..100 {
-        let _: T = bonjson::from_slice(&bonjson_bytes).unwrap();
+        let _: T = serde_bonjson::from_slice(&bonjson_bytes).unwrap();
         let _: T = serde_json::from_slice(&json_bytes).unwrap();
     }
 
     // BONJSON decode
     let start = Instant::now();
     for _ in 0..iterations {
-        let _: T = bonjson::from_slice(&bonjson_bytes).unwrap();
+        let _: T = serde_bonjson::from_slice(&bonjson_bytes).unwrap();
     }
     let bonjson_time = start.elapsed();
 
@@ -236,7 +236,7 @@ fn bench_decode<T: Serialize + for<'de> Deserialize<'de>>(name: &str, data: &T, 
 }
 
 fn bench_decode_allow_nul<T: Serialize + for<'de> Deserialize<'de>>(name: &str, data: &T, iterations: u32) {
-    let bonjson_bytes = bonjson::to_vec(data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(data).unwrap();
     let json_bytes = serde_json::to_vec(data).unwrap();
 
     // Config with allow_nul = true (skips NUL byte validation)
@@ -245,14 +245,14 @@ fn bench_decode_allow_nul<T: Serialize + for<'de> Deserialize<'de>>(name: &str, 
 
     // Warmup
     for _ in 0..100 {
-        let _: T = bonjson::from_slice_with_config(&bonjson_bytes, config.clone()).unwrap();
+        let _: T = serde_bonjson::from_slice_with_config(&bonjson_bytes, config.clone()).unwrap();
         let _: T = serde_json::from_slice(&json_bytes).unwrap();
     }
 
     // BONJSON decode with allow_nul
     let start = Instant::now();
     for _ in 0..iterations {
-        let _: T = bonjson::from_slice_with_config(&bonjson_bytes, config.clone()).unwrap();
+        let _: T = serde_bonjson::from_slice_with_config(&bonjson_bytes, config.clone()).unwrap();
     }
     let bonjson_time = start.elapsed();
 

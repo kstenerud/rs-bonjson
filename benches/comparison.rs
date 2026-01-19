@@ -82,7 +82,7 @@ fn bench_simple_struct(c: &mut Criterion) {
 
     // Encoding
     group.bench_function("bonjson_encode", |b| {
-        b.iter(|| black_box(bonjson::to_vec(black_box(&data)).unwrap()))
+        b.iter(|| black_box(serde_bonjson::to_vec(black_box(&data)).unwrap()))
     });
 
     group.bench_function("json_encode", |b| {
@@ -90,12 +90,12 @@ fn bench_simple_struct(c: &mut Criterion) {
     });
 
     // Decoding
-    let bonjson_bytes = bonjson::to_vec(&data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
     let json_bytes = serde_json::to_vec(&data).unwrap();
 
     group.bench_function("bonjson_decode", |b| {
         b.iter(|| {
-            black_box(bonjson::from_slice::<SimpleStruct>(black_box(&bonjson_bytes)).unwrap())
+            black_box(serde_bonjson::from_slice::<SimpleStruct>(black_box(&bonjson_bytes)).unwrap())
         })
     });
 
@@ -118,7 +118,7 @@ fn bench_complex_struct(c: &mut Criterion) {
 
     // Encoding
     group.bench_function("bonjson_encode", |b| {
-        b.iter(|| black_box(bonjson::to_vec(black_box(&data)).unwrap()))
+        b.iter(|| black_box(serde_bonjson::to_vec(black_box(&data)).unwrap()))
     });
 
     group.bench_function("json_encode", |b| {
@@ -126,12 +126,12 @@ fn bench_complex_struct(c: &mut Criterion) {
     });
 
     // Decoding
-    let bonjson_bytes = bonjson::to_vec(&data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
     let json_bytes = serde_json::to_vec(&data).unwrap();
 
     group.bench_function("bonjson_decode", |b| {
         b.iter(|| {
-            black_box(bonjson::from_slice::<ComplexStruct>(black_box(&bonjson_bytes)).unwrap())
+            black_box(serde_bonjson::from_slice::<ComplexStruct>(black_box(&bonjson_bytes)).unwrap())
         })
     });
 
@@ -152,14 +152,14 @@ fn bench_integer_array(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("integer_array_1000");
 
-    let bonjson_bytes = bonjson::to_vec(&data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
     let json_bytes = serde_json::to_vec(&data).unwrap();
 
     group.throughput(Throughput::Elements(data.len() as u64));
 
     // Encoding
     group.bench_function("bonjson_encode", |b| {
-        b.iter(|| black_box(bonjson::to_vec(black_box(&data)).unwrap()))
+        b.iter(|| black_box(serde_bonjson::to_vec(black_box(&data)).unwrap()))
     });
 
     group.bench_function("json_encode", |b| {
@@ -169,7 +169,7 @@ fn bench_integer_array(c: &mut Criterion) {
     // Decoding
     group.bench_function("bonjson_decode", |b| {
         b.iter(|| {
-            black_box(bonjson::from_slice::<Vec<i32>>(black_box(&bonjson_bytes)).unwrap())
+            black_box(serde_bonjson::from_slice::<Vec<i32>>(black_box(&bonjson_bytes)).unwrap())
         })
     });
 
@@ -190,14 +190,14 @@ fn bench_nested_data(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("nested_100_objects");
 
-    let bonjson_bytes = bonjson::to_vec(&data).unwrap();
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
     let json_bytes = serde_json::to_vec(&data).unwrap();
 
     group.throughput(Throughput::Bytes(json_bytes.len() as u64));
 
     // Encoding
     group.bench_function("bonjson_encode", |b| {
-        b.iter(|| black_box(bonjson::to_vec(black_box(&data)).unwrap()))
+        b.iter(|| black_box(serde_bonjson::to_vec(black_box(&data)).unwrap()))
     });
 
     group.bench_function("json_encode", |b| {
@@ -207,7 +207,7 @@ fn bench_nested_data(c: &mut Criterion) {
     // Decoding
     group.bench_function("bonjson_decode", |b| {
         b.iter(|| {
-            black_box(bonjson::from_slice::<Vec<ComplexStruct>>(black_box(&bonjson_bytes)).unwrap())
+            black_box(serde_bonjson::from_slice::<Vec<ComplexStruct>>(black_box(&bonjson_bytes)).unwrap())
         })
     });
 

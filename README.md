@@ -1,25 +1,63 @@
-# bonjson
+# serde_bonjson
 
-A Rust implementation of [BONJSON](https://github.com/kstenerud/bonjson) (Binary Object Notation for JSON), a binary format that is 1:1 compatible with JSON but more compact and faster to process.
+A Rust implementation of [BONJSON](https://github.com/kstenerud/bonjson) (Binary Object Notation for JSON) — a binary encoding that's **1:1 compatible with JSON's data model** but faster and more compact.
 
-## Features
+**If you're using `serde_json`, switching to `serde_bonjson` is a one-line change.**
 
-- Full serde integration for seamless serialization/deserialization
-- Zero-copy deserialization for strings
-- Compact encoding (typically 25-80% smaller than JSON)
-- Faster than serde_json for most workloads
-- Configurable validation levels for performance tuning
+## Why Switch to BONJSON?
 
-## Usage
+| Benefit                     | Description                                                     |
+|-----------------------------|-----------------------------------------------------------------|
+| **2-3x faster encoding**    | Binary format avoids string formatting overhead                 |
+| **1.5-2x faster decoding**  | No text parsing, direct binary reads                            |
+| **25-50% smaller payloads** | Integers encode in 1-9 bytes instead of ASCII digits            |
+| **Drop-in replacement**     | Same API as `serde_json` — just change the import               |
+| **Same data types**         | BONJSON supports the same data types as JSON. No more, no less. |
+| **Full serde support**      | Works with any type that implements `Serialize`/`Deserialize`   |
+
+## Migrating from serde_json
+
+### Zero-Change Migration
+
+For the smoothest migration, alias the crate and use the `json!` macro:
+
+```rust
+use serde_bonjson as serde_json;
+use serde_json::json;  // json! is an alias for bonjson!
+
+// Your existing code works unchanged!
+let value = json!({ "name": "Alice", "age": 30 });
+let bytes = serde_json::to_vec(&value)?;
+let decoded: serde_json::Value = serde_json::from_slice(&bytes)?;
+```
+
+### Standard Migration
+
+Or update your imports explicitly — the API mirrors `serde_json`:
+
+```rust
+// Before (serde_json)                          // After (serde_bonjson)
+use serde_json;                                 use serde_bonjson;
+
+let bytes = serde_json::to_vec(&data)?;         let bytes = serde_bonjson::to_vec(&data)?;
+let data = serde_json::from_slice(&b)?;         let data = serde_bonjson::from_slice(&b)?;
+
+serde_json::json!({ "key": value })             serde_bonjson::bonjson!({ "key": value })
+serde_json::Value                               serde_bonjson::Value
+```
+
+Either way, your existing serde derives work unchanged.
+
+## Quick Start
 
 Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bonjson = "0.1"
+serde_bonjson = "0.1"
 ```
 
-### Basic Usage
+### Serializing and Deserializing Structs
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -30,102 +68,136 @@ struct Person {
     age: u32,
 }
 
-fn main() {
-    let person = Person {
-        name: "Alice".to_string(),
-        age: 30,
-    };
+// Serialize to BONJSON bytes
+let person = Person { name: "Alice".into(), age: 30 };
+let bytes = serde_bonjson::to_vec(&person).unwrap();
 
-    // Encode to BONJSON
-    let bytes = bonjson::to_vec(&person).unwrap();
-
-    // Decode from BONJSON
-    let decoded: Person = bonjson::from_slice(&bytes).unwrap();
-
-    println!("{:?}", decoded);
-}
+// Deserialize from BONJSON bytes
+let decoded: Person = serde_bonjson::from_slice(&bytes).unwrap();
 ```
 
 ### Working with Dynamic Values
 
-```rust
-use bonjson::{Value, bonjson};
+When you don't know the structure at compile time, use `Value`:
 
-// Create values with the bonjson! macro
+```rust
+use serde_bonjson::{Value, bonjson};
+
+// Build values with the bonjson! macro (just like json!)
 let value = bonjson!({
     "name": "Bob",
-    "scores": [95, 87, 92]
+    "scores": [95, 87, 92],
+    "active": true
 });
 
-// Encode/decode dynamic values
-let bytes = bonjson::encode_value(&value).unwrap();
-let decoded = bonjson::decode_value(&bytes).unwrap();
+// Access fields dynamically
+if let Some(name) = value.get_key("name").and_then(|v| v.as_str()) {
+    println!("Name: {}", name);
+}
+
+// Encode/decode Value types
+let bytes = serde_bonjson::encode_value(&value).unwrap();
+let decoded = serde_bonjson::decode_value(&bytes).unwrap();
+```
+
+### Writing to Files or Streams
+
+```rust
+use std::fs::File;
+use std::io::BufWriter;
+
+let file = File::create("data.bonjson")?;
+// Use BufWriter for better performance with files/network
+let writer = BufWriter::new(file);
+serde_bonjson::to_writer(writer, &data)?;
 ```
 
 ## Performance
 
-BONJSON typically outperforms JSON for both encoding and decoding:
+Benchmarks comparing BONJSON vs JSON (using `serde_json`):
 
-| Operation | Speedup vs JSON |
-|-----------|-----------------|
-| Encoding structured data | 2-3x faster |
-| Encoding integers | 2-3x faster |
-| Encoding long strings | 5-9x faster |
-| Decoding structured data | 1.4-1.7x faster |
-| Decoding integers | 2-3x faster |
-| Decoding booleans | 7x faster |
+| Workload | Encode Speedup | Decode Speedup | Size Reduction |
+|----------|---------------|----------------|----------------|
+| Simple struct | 2.0x | 1.9x | ~40% |
+| Complex nested data | 2.0x | 1.5x | ~35% |
+| Integer arrays | 2.9x | 2.5x | ~50% |
+| String-heavy data | 1.3x* | 1.2x* | ~10% |
 
-Run the benchmark yourself:
+*With default settings. See "Performance Tuning" below for string-heavy workloads.
+
+Run the benchmarks yourself:
 
 ```bash
-cargo run --release --example quick_bench
+cargo bench
 ```
 
 ### Performance Tuning for Trusted Data
 
-By default, BONJSON validates that strings don't contain NUL (0x00) bytes, as required by the specification. JSON parsers don't perform this check, which gives them a slight advantage on string-heavy workloads in the default configuration.
-
-For trusted data sources where you know NUL bytes won't be present, you can skip this validation. This makes BONJSON faster than JSON even for string-heavy data:
+By default, BONJSON validates that strings don't contain NUL bytes (per the spec). For trusted data where this check isn't needed:
 
 ```rust
-use bonjson::decoder::DecoderConfig;
+use serde_bonjson::DecoderConfig;
 
 let mut config = DecoderConfig::default();
 config.allow_nul = true;
 
-let data: MyStruct = bonjson::from_slice_with_config(&bytes, config)?;
+let data: MyStruct = serde_bonjson::from_slice_with_config(&bytes, config)?;
 ```
 
-**Performance impact of `allow_nul: true`:**
+This improves string decoding by 20-60% depending on string length.
 
-| String Length | Speedup Improvement |
-|---------------|---------------------|
-| Short (<16 bytes) | ~0% (negligible) |
-| Medium (~50 bytes) | ~20% faster |
-| Long (~500 bytes) | ~30% faster |
-| Very long (~10KB) | ~60% faster |
+## API Reference
 
-This is particularly beneficial for workloads with many medium-to-large strings.
+### Core Functions
 
-## Configuration Options
+| Function | Description |
+|----------|-------------|
+| `to_vec(&T)` | Serialize to a new `Vec<u8>` |
+| `to_writer(W, &T)` | Serialize to any `Write` implementation |
+| `from_slice(&[u8])` | Deserialize from bytes |
+| `from_slice_with_config(&[u8], config)` | Deserialize with custom limits |
 
-The `DecoderConfig` struct provides several options:
+### Value Functions
+
+| Function | Description |
+|----------|-------------|
+| `encode_value(&Value)` | Encode a dynamic `Value` to bytes |
+| `decode_value(&[u8])` | Decode bytes to a dynamic `Value` |
+| `bonjson!({ ... })` | Macro to construct `Value` literals |
+| `json!({ ... })` | Alias for `bonjson!` (for serde_json compatibility) |
+
+### Configuration
 
 ```rust
-use bonjson::decoder::{DecoderConfig, DuplicateKeyMode};
+use serde_bonjson::{DecoderConfig, DuplicateKeyMode};
 
 let config = DecoderConfig {
-    allow_nul: false,              // Allow NUL bytes in strings
-    allow_nan_infinity: false,     // Allow NaN/Infinity float values
+    // Validation options
+    allow_nul: false,              // Allow NUL (0x00) in strings
+    allow_nan_infinity: false,     // Allow NaN/Infinity floats
     allow_trailing_bytes: false,   // Allow extra bytes after document
-    duplicate_key_mode: DuplicateKeyMode::Error,  // How to handle duplicate keys
-    max_depth: 1000,               // Maximum nesting depth
-    max_container_size: 1_000_000, // Maximum elements per container
-    max_string_length: 100_000_000, // Maximum string length
-    max_chunks: 1000,              // Maximum chunks per chunked string
-    max_document_size: 1_000_000_000, // Maximum document size
+    duplicate_key_mode: DuplicateKeyMode::Error,
+
+    // Resource limits (defaults per BONJSON spec)
+    max_depth: 512,
+    max_container_size: 1_000_000,
+    max_string_length: 10_000_000,
+    max_document_size: 2_000_000_000,
+    max_chunks: 100,
 };
 ```
+
+## When to Use BONJSON vs JSON
+
+**Use BONJSON when:**
+- Performance matters (APIs, databases, caching)
+- Bandwidth is limited (mobile, IoT, real-time systems)
+- You control both endpoints (internal services)
+
+**Stick with JSON when:**
+- Human readability is required (config files, logs)
+- Interoperating with systems that only support JSON
+- Debugging is more important than performance
 
 ## License
 

@@ -1,7 +1,7 @@
 // ABOUTME: Universal test runner for BONJSON conformance tests.
 // ABOUTME: Parses JSON test specifications and runs them against the codec.
 
-use bonjson::{decode_value, encode_value, DecoderConfig, DuplicateKeyMode, Error, Value};
+use serde_bonjson::{decode_value, encode_value, DecoderConfig, DuplicateKeyMode, Error, Value};
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::Path;
@@ -442,7 +442,7 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
             let input_bytes = hex_to_bytes(test["input_bytes"].as_str().unwrap());
             let expected_value = json_to_value(&test["expected_value"]);
 
-            match bonjson::decode_value_with_config(&input_bytes, config) {
+            match serde_bonjson::decode_value_with_config(&input_bytes, config) {
                 Ok(actual_value) => {
                     if values_equal(&actual_value, &expected_value) {
                         Ok(())
@@ -466,7 +466,7 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
             }
 
             match encode_value(&input) {
-                Ok(encoded) => match bonjson::decode_value_with_config(&encoded, config) {
+                Ok(encoded) => match serde_bonjson::decode_value_with_config(&encoded, config) {
                     Ok(decoded) => {
                         if values_equal(&decoded, &input) {
                             Ok(())
@@ -505,7 +505,7 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
             let input_bytes = hex_to_bytes(test["input_bytes"].as_str().unwrap());
             let expected_error = test["expected_error"].as_str().unwrap();
 
-            match bonjson::decode_value_with_config(&input_bytes, config) {
+            match serde_bonjson::decode_value_with_config(&input_bytes, config) {
                 Ok(_) => Err(format!(
                     "{}: expected decode error '{}' but succeeded",
                     name, expected_error

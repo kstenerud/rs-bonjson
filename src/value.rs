@@ -345,10 +345,13 @@ impl<T: Into<Value>> FromIterator<T> for Value {
 
 /// Macro for creating BONJSON values easily.
 ///
+/// This is the BONJSON-specific name. For drop-in `serde_json` compatibility,
+/// you can also use [`json!`] which is an alias for this macro.
+///
 /// # Examples
 ///
 /// ```ignore
-/// use bonjson::bonjson;
+/// use serde_bonjson::bonjson;
 ///
 /// let value = bonjson!({
 ///     "name": "test",
@@ -373,7 +376,7 @@ macro_rules! bonjson {
 
     // array
     ([ $($elem:tt),* $(,)? ]) => {
-        $crate::Value::Array(vec![ $( bonjson!($elem) ),* ])
+        $crate::Value::Array(vec![ $( $crate::bonjson!($elem) ),* ])
     };
 
     // object
@@ -381,7 +384,7 @@ macro_rules! bonjson {
         {
             let mut map = std::collections::BTreeMap::new();
             $(
-                map.insert(String::from($key), bonjson!($value));
+                map.insert(String::from($key), $crate::bonjson!($value));
             )*
             $crate::Value::Object(map)
         }
@@ -390,5 +393,26 @@ macro_rules! bonjson {
     // other expressions (numbers, strings, etc.)
     ($other:expr) => {
         $crate::Value::from($other)
+    };
+}
+
+/// Alias for [`bonjson!`] for drop-in `serde_json` compatibility.
+///
+/// This allows users to migrate from `serde_json` with minimal code changes:
+///
+/// ```rust
+/// use serde_bonjson as serde_json;
+/// use serde_json::json;
+///
+/// let value = json!({
+///     "name": "test",
+///     "values": [1, 2, 3],
+///     "active": true
+/// });
+/// ```
+#[macro_export]
+macro_rules! json {
+    ($($tt:tt)*) => {
+        $crate::bonjson!($($tt)*)
     };
 }

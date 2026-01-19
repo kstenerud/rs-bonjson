@@ -1,9 +1,9 @@
 [package]
-name = "bonjson"
+name = "serde_bonjson"
 version = "0.1.0"
 edition = "2021"
 authors = ["Karl Stenerud <kstenerud@gmail.com>"]
-description = "A high-performance BONJSON (Binary Object Notation for JSON) encoder and decoder"
+description = "A high-performance BONJSON (Binary Object Notation for JSON) encoder and decoder with serde support"
 license = "MIT"
 repository = "https://github.com/kstenerud/bonjson"
 keywords = ["bonjson", "json", "binary", "serialization", "serde"]
