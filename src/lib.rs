@@ -144,10 +144,15 @@ pub use ser::Serializer;
 pub use types::{limits, type_code, BigNumber};
 pub use value::Value;
 
-// The bonjson! macro is automatically exported at crate root via #[macro_export]
+// The bonjson! and json! macros are automatically exported at crate root via #[macro_export]
+
+/// A map of String to Value, used for JSON objects.
+///
+/// This is a type alias for compatibility with `serde_json::Map`.
+pub type Map<K, V> = std::collections::BTreeMap<K, V>;
 
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{Read, Write};
 
 /// Serialize a value to a BONJSON byte vector.
 ///
@@ -223,6 +228,130 @@ pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
     }
     encoder.finish()?;
     Ok(())
+}
+
+/// Deserialize from a reader.
+///
+/// # Example
+///
+/// ```rust
+/// use serde_bonjson::from_reader;
+/// use std::io::Cursor;
+///
+/// let data = Cursor::new(vec![0x2a]); // Small integer 42
+/// let value: i32 = from_reader(data).unwrap();
+/// assert_eq!(value, 42);
+/// ```
+///
+/// # Performance Note
+///
+/// This function reads the entire input into memory before parsing.
+/// For large files, consider memory-mapping or streaming approaches.
+/// For better performance with unbuffered readers (files, network),
+/// wrap them in [`std::io::BufReader`]:
+///
+/// ```rust
+/// use serde_bonjson::from_reader;
+/// use std::io::BufReader;
+/// use std::fs::File;
+///
+/// # fn example() -> serde_bonjson::Result<()> {
+/// let file = File::open("data.bonjson")?;
+/// let buffered = BufReader::new(file);
+/// let data: Vec<i32> = from_reader(buffered)?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if reading fails or deserialization fails.
+pub fn from_reader<R: Read, T: for<'de> Deserialize<'de>>(mut reader: R) -> Result<T> {
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+    from_slice(&buf)
+}
+
+/// Deserialize from a reader with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if reading fails or deserialization fails.
+pub fn from_reader_with_config<R: Read, T: for<'de> Deserialize<'de>>(
+    mut reader: R,
+    config: DecoderConfig,
+) -> Result<T> {
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+    from_slice_with_config(&buf, config)
+}
+
+/// Convert a `T` into a [`Value`].
+///
+/// This is useful when you have a typed struct but need a dynamic `Value`
+/// for further manipulation or inspection.
+///
+/// # Example
+///
+/// ```rust
+/// use serde::Serialize;
+/// use serde_bonjson::{to_value, Value};
+///
+/// #[derive(Serialize)]
+/// struct Person {
+///     name: String,
+///     age: u32,
+/// }
+///
+/// let person = Person { name: "Alice".into(), age: 30 };
+/// let value = to_value(&person).unwrap();
+///
+/// assert_eq!(value.get_key("name").and_then(|v| v.as_str()), Some("Alice"));
+/// assert_eq!(value.get_key("age").and_then(|v| v.as_i64()), Some(30));
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if serialization fails (e.g., NaN/infinity floats).
+pub fn to_value<T: Serialize>(value: &T) -> Result<Value> {
+    // Serialize to bytes, then decode to Value
+    let bytes = to_vec(value)?;
+    decode_value(&bytes)
+}
+
+/// Convert a [`Value`] into a `T`.
+///
+/// This is useful when you have a dynamic `Value` and want to convert it
+/// into a typed struct.
+///
+/// # Example
+///
+/// ```rust
+/// use serde::Deserialize;
+/// use serde_bonjson::{from_value, bonjson};
+///
+/// #[derive(Deserialize, Debug, PartialEq)]
+/// struct Person {
+///     name: String,
+///     age: u32,
+/// }
+///
+/// let value = bonjson!({
+///     "name": "Alice",
+///     "age": 30
+/// });
+///
+/// let person: Person = from_value(&value).unwrap();
+/// assert_eq!(person, Person { name: "Alice".into(), age: 30 });
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the `Value` structure doesn't match the target type.
+pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
+    // Encode to bytes, then deserialize to T
+    let bytes = encode_value(value)?;
+    from_slice(&bytes)
 }
 
 /// Decode a BONJSON document into a `Value`.

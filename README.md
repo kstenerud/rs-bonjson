@@ -155,16 +155,29 @@ This improves string decoding by 20-60% depending on string length.
 | `to_vec(&T)` | Serialize to a new `Vec<u8>` |
 | `to_writer(W, &T)` | Serialize to any `Write` implementation |
 | `from_slice(&[u8])` | Deserialize from bytes |
+| `from_reader(R)` | Deserialize from any `Read` implementation |
 | `from_slice_with_config(&[u8], config)` | Deserialize with custom limits |
+| `from_reader_with_config(R, config)` | Deserialize from reader with custom limits |
 
 ### Value Functions
 
 | Function | Description |
 |----------|-------------|
-| `encode_value(&Value)` | Encode a dynamic `Value` to bytes |
-| `decode_value(&[u8])` | Decode bytes to a dynamic `Value` |
+| `to_value(&T)` | Convert any serializable type to `Value` |
+| `from_value(&Value)` | Convert `Value` to any deserializable type |
+| `encode_value(&Value)` | Encode a `Value` to bytes |
+| `decode_value(&[u8])` | Decode bytes to a `Value` |
 | `bonjson!({ ... })` | Macro to construct `Value` literals |
 | `json!({ ... })` | Alias for `bonjson!` (for serde_json compatibility) |
+
+### Types
+
+| Type | Description |
+|------|-------------|
+| `Value` | Dynamic value type (like `serde_json::Value`) |
+| `Map<K, V>` | Type alias for object maps (like `serde_json::Map`) |
+| `Error` | Error type for all operations |
+| `Result<T>` | Result type alias |
 
 ### Configuration
 
