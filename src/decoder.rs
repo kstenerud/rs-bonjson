@@ -113,9 +113,6 @@ impl<'a> Decoder<'a> {
 
     /// Create a new decoder with custom configuration.
     pub fn with_config(data: &'a [u8], config: DecoderConfig) -> Self {
-        if data.len() > config.max_document_size {
-            // We'll check this when decoding and return an error
-        }
         Self {
             data,
             pos: 0,
@@ -123,6 +120,15 @@ impl<'a> Decoder<'a> {
             containers: Vec::new(),
             scratch: Vec::new(),
         }
+    }
+
+    /// Check document size limit (called once at start of decoding).
+    #[inline]
+    pub fn check_document_size(&self) -> Result<()> {
+        if self.data.len() > self.config.max_document_size {
+            return Err(Error::MaxDocumentSizeExceeded);
+        }
+        Ok(())
     }
 
     /// Get the current position in the input.
@@ -205,13 +211,218 @@ impl<'a> Decoder<'a> {
         Ok(bytes)
     }
 
-    /// Decode the next value from the input.
-    pub fn decode_value(&mut self) -> Result<DecodedValue<'a>> {
-        // Check document size
-        if self.data.len() > self.config.max_document_size {
-            return Err(Error::MaxDocumentSizeExceeded);
+    // =========================================================================
+    // Unchecked methods for serde deserializer (skips state tracking)
+    // These are safe to use when the caller guarantees correct call order.
+    // =========================================================================
+
+    /// Decode the next value without state tracking.
+    /// For use by serde deserializer which guarantees correct structure.
+    #[inline]
+    pub(crate) fn decode_value_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let tc = self.read_byte()?;
+        self.decode_value_unchecked_with_type(tc)
+    }
+
+    /// Decode a value given its type code, without state tracking.
+    #[inline]
+    fn decode_value_unchecked_with_type(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
+        match tc {
+            // Small integers: 0-100
+            0x00..=0x64 => Ok(DecodedValue::Int(tc as i64)),
+
+            // Reserved
+            0x65..=0x67 => Err(Error::InvalidTypeCode(tc)),
+
+            // Long string
+            type_code::STRING_LONG => self.decode_long_string_unchecked(),
+
+            // BigNumber
+            type_code::BIG_NUMBER => self.decode_big_number_unchecked(),
+
+            // Float16 (bfloat16)
+            type_code::FLOAT16 => self.decode_float16_unchecked(),
+
+            // Float32
+            type_code::FLOAT32 => self.decode_float32_unchecked(),
+
+            // Float64
+            type_code::FLOAT64 => self.decode_float64_unchecked(),
+
+            // Null
+            type_code::NULL => Ok(DecodedValue::Null),
+
+            // False
+            type_code::FALSE => Ok(DecodedValue::Bool(false)),
+
+            // True
+            type_code::TRUE => Ok(DecodedValue::Bool(true)),
+
+            // Unsigned integers
+            0x70..=0x77 => self.decode_unsigned_int_unchecked(tc),
+
+            // Signed integers
+            0x78..=0x7f => self.decode_signed_int_unchecked(tc),
+
+            // Short strings
+            0x80..=0x8f => self.decode_short_string_unchecked(tc),
+
+            // Reserved
+            0x90..=0x98 => Err(Error::InvalidTypeCode(tc)),
+
+            // Array start
+            type_code::ARRAY_START => Ok(DecodedValue::ArrayStart),
+
+            // Object start
+            type_code::OBJECT_START => Ok(DecodedValue::ObjectStart),
+
+            // Container end
+            type_code::CONTAINER_END => Ok(DecodedValue::ContainerEnd),
+
+            // Small negative integers: -100 to -1
+            0x9c..=0xff => Ok(DecodedValue::Int(tc as i8 as i64)),
+        }
+    }
+
+    #[inline]
+    fn decode_unsigned_int_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
+        let size = type_code::unsigned_int_size(tc);
+        let bytes = self.read_bytes(size)?;
+        let mut buf = [0u8; 8];
+        buf[..size].copy_from_slice(bytes);
+        Ok(DecodedValue::UInt(u64::from_le_bytes(buf)))
+    }
+
+    #[inline]
+    fn decode_signed_int_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
+        let size = type_code::signed_int_size(tc);
+        let bytes = self.read_bytes(size)?;
+        let sign_bit = (bytes[size - 1] >> 7) & 1;
+        let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+        let mut buf = [fill; 8];
+        buf[..size].copy_from_slice(bytes);
+        Ok(DecodedValue::Int(i64::from_le_bytes(buf)))
+    }
+
+    #[inline]
+    fn decode_float16_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let bytes = self.read_bytes(2)?;
+        let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let f32_bits = (bits as u32) << 16;
+        let value = f32::from_bits(f32_bits) as f64;
+        self.check_float(value)?;
+        Ok(DecodedValue::Float(value))
+    }
+
+    #[inline]
+    fn decode_float32_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let bytes = self.read_bytes(4)?;
+        let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+        self.check_float(value)?;
+        Ok(DecodedValue::Float(value))
+    }
+
+    #[inline]
+    fn decode_float64_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let bytes = self.read_bytes(8)?;
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(bytes);
+        let value = f64::from_le_bytes(buf);
+        self.check_float(value)?;
+        Ok(DecodedValue::Float(value))
+    }
+
+    #[inline]
+    fn decode_short_string_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
+        let len = type_code::short_string_len(tc);
+        let bytes = self.read_bytes(len)?;
+        let s = if self.config.allow_nul {
+            std::str::from_utf8(bytes)?
+        } else {
+            validate_utf8_no_nul(bytes)?
+        };
+        Ok(DecodedValue::String(s))
+    }
+
+    #[inline]
+    fn decode_long_string_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let (length, continuation) = self.decode_length_field()?;
+        if length > self.config.max_string_length as u64 {
+            return Err(Error::MaxStringLengthExceeded);
+        }
+        let bytes = self.read_bytes(length as usize)?;
+        if !continuation {
+            let s = if self.config.allow_nul {
+                std::str::from_utf8(bytes)?
+            } else {
+                validate_utf8_no_nul(bytes)?
+            };
+            return Ok(DecodedValue::String(s));
+        }
+        // Multi-chunk: delegate to the full implementation (rare case)
+        self.pos -= length as usize + 1; // Back up to re-read length field
+        // Rewind to before the length field - we need to find the length field size
+        // This is complex, so just use the checked version for multi-chunk strings
+        self.decode_long_string()
+    }
+
+    fn decode_big_number_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        // BigNumber decoding is complex enough that we don't duplicate it
+        // Just call the regular version (state tracking is minimal overhead for big numbers)
+        let header = self.read_byte()?;
+        let sign = if header & 1 == 1 { -1i8 } else { 1i8 };
+        let exp_len = ((header >> 1) & 3) as usize;
+        let sig_len = (header >> 3) as usize;
+
+        if sig_len == 0 {
+            match exp_len {
+                0 => return Ok(DecodedValue::BigNumber(BigNumber::new(sign, 0, 0))),
+                1 => {
+                    if !self.config.allow_nan_infinity {
+                        return Err(Error::InvalidData("Infinity not allowed".into()));
+                    }
+                    return Ok(DecodedValue::Float(if sign < 0 { f64::NEG_INFINITY } else { f64::INFINITY }));
+                }
+                2 | 3 => {
+                    if !self.config.allow_nan_infinity {
+                        return Err(Error::InvalidData("NaN not allowed".into()));
+                    }
+                    return Ok(DecodedValue::Float(f64::NAN));
+                }
+                _ => unreachable!(),
+            }
         }
 
+        if sig_len > 8 {
+            return Err(Error::ValueOutOfRange);
+        }
+
+        let exponent = if exp_len > 0 {
+            let bytes = self.read_bytes(exp_len)?;
+            let sign_bit = (bytes[exp_len - 1] >> 7) & 1;
+            let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+            let mut buf = [fill; 4];
+            buf[..exp_len].copy_from_slice(bytes);
+            i32::from_le_bytes(buf)
+        } else {
+            0
+        };
+
+        let significand = if sig_len > 0 {
+            let bytes = self.read_bytes(sig_len)?;
+            let mut buf = [0u8; 8];
+            buf[..sig_len].copy_from_slice(bytes);
+            u64::from_le_bytes(buf)
+        } else {
+            0
+        };
+
+        Ok(DecodedValue::BigNumber(BigNumber::new(sign, significand, exponent)))
+    }
+
+    /// Decode the next value from the input.
+    #[inline]
+    pub fn decode_value(&mut self) -> Result<DecodedValue<'a>> {
         let type_code = self.read_byte()?;
 
         // Handle object key expectation

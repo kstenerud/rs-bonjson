@@ -137,6 +137,7 @@ pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
 /// ```
 pub fn decode_value(data: &[u8]) -> Result<Value> {
     let mut decoder = Decoder::new(data);
+    decoder.check_document_size()?;
     let value = decode_value_recursive(&mut decoder)?;
     decoder.finish()?;
     Ok(value)
@@ -145,6 +146,7 @@ pub fn decode_value(data: &[u8]) -> Result<Value> {
 /// Decode a BONJSON document into a `Value` with custom configuration.
 pub fn decode_value_with_config(data: &[u8], config: DecoderConfig) -> Result<Value> {
     let mut decoder = Decoder::with_config(data, config);
+    decoder.check_document_size()?;
     let value = decode_value_recursive(&mut decoder)?;
     decoder.finish()?;
     Ok(value)

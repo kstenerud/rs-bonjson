@@ -37,7 +37,7 @@ impl<'de> Deserializer<'de> {
 
     fn peek_value(&mut self) -> Result<&DecodedValue<'de>> {
         if self.peeked.is_none() {
-            self.peeked = Some(self.decoder.decode_value()?);
+            self.peeked = Some(self.decoder.decode_value_unchecked()?);
         }
         Ok(self.peeked.as_ref().unwrap())
     }
@@ -45,7 +45,7 @@ impl<'de> Deserializer<'de> {
     fn next_value(&mut self) -> Result<DecodedValue<'de>> {
         match self.peeked.take() {
             Some(v) => Ok(v),
-            None => self.decoder.decode_value(),
+            None => self.decoder.decode_value_unchecked(),
         }
     }
 }
@@ -53,6 +53,7 @@ impl<'de> Deserializer<'de> {
 /// Deserialize a value from a BONJSON byte slice.
 pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
     let mut de = Deserializer::from_slice(data);
+    de.decoder.check_document_size()?;
     let value = T::deserialize(&mut de)?;
     de.decoder.finish()?;
     Ok(value)
@@ -64,6 +65,7 @@ pub fn from_slice_with_config<'de, T: Deserialize<'de>>(
     config: DecoderConfig,
 ) -> Result<T> {
     let mut de = Deserializer::from_slice_with_config(data, config);
+    de.decoder.check_document_size()?;
     let value = T::deserialize(&mut de)?;
     de.decoder.finish()?;
     Ok(value)
@@ -209,7 +211,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             DecodedValue::ArrayStart => {
                 let mut bytes = Vec::new();
                 loop {
-                    match self.decoder.decode_value()? {
+                    match self.decoder.decode_value_unchecked()? {
                         DecodedValue::ContainerEnd => break,
                         DecodedValue::Int(n) if n >= 0 && n <= 255 => bytes.push(n as u8),
                         DecodedValue::UInt(n) if n <= 255 => bytes.push(n as u8),
