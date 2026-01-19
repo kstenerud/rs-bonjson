@@ -110,6 +110,10 @@ use std::io::Write;
 /// let bytes = to_vec(&42i32).unwrap();
 /// assert_eq!(bytes, vec![0x2a]); // Small integer 42
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if serialization fails (e.g., NaN/infinity floats).
 pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     // Pre-allocate to avoid reallocations for small-medium payloads
     let mut buf = Vec::with_capacity(128);
@@ -127,6 +131,10 @@ pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 /// let mut buf = Vec::new();
 /// to_writer(&mut buf, &"hello").unwrap();
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if serialization fails or writing to the writer fails.
 pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
     let mut encoder = Encoder::new(writer);
     {
@@ -148,6 +156,13 @@ pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
 /// let value = decode_value(&bytes).unwrap();
 /// assert!(value.is_array());
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The document exceeds size limits
+/// - The data is malformed or truncated
+/// - There are trailing bytes after the value
 pub fn decode_value(data: &[u8]) -> Result<Value> {
     let mut decoder = Decoder::new(data);
     decoder.check_document_size()?;
@@ -157,6 +172,13 @@ pub fn decode_value(data: &[u8]) -> Result<Value> {
 }
 
 /// Decode a BONJSON document into a `Value` with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The document exceeds configured limits
+/// - The data is malformed or truncated
+/// - There are trailing bytes (unless `allow_trailing_bytes` is set)
 pub fn decode_value_with_config(data: &[u8], config: DecoderConfig) -> Result<Value> {
     let mut decoder = Decoder::with_config(data, config);
     decoder.check_document_size()?;
@@ -223,10 +245,11 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
     }
 }
 
-fn decode_value_from_decoded(decoded: DecodedValue<'_>, decoder: &mut Decoder<'_>) -> Result<Value> {
+#[allow(clippy::needless_pass_by_value)] // DecodedValue is small and Copy-like
+fn decode_value_from_decoded(value: DecodedValue<'_>, dec: &mut Decoder<'_>) -> Result<Value> {
     use decoder::DuplicateKeyMode;
 
-    match decoded {
+    match value {
         DecodedValue::Null => Ok(Value::Null),
         DecodedValue::Bool(b) => Ok(Value::Bool(b)),
         DecodedValue::Int(n) => Ok(Value::Int(n)),
@@ -237,19 +260,19 @@ fn decode_value_from_decoded(decoded: DecodedValue<'_>, decoder: &mut Decoder<'_
         DecodedValue::ArrayStart => {
             let mut arr = Vec::new();
             loop {
-                let next = decoder.decode_value()?;
+                let next = dec.decode_value()?;
                 if matches!(next, DecodedValue::ContainerEnd) {
                     break;
                 }
-                arr.push(decode_value_from_decoded(next, decoder)?);
+                arr.push(decode_value_from_decoded(next, dec)?);
             }
             Ok(Value::Array(arr))
         }
         DecodedValue::ObjectStart => {
-            let dup_mode = decoder.config().duplicate_key_mode;
+            let dup_mode = dec.config().duplicate_key_mode;
             let mut map = std::collections::BTreeMap::new();
             loop {
-                let key_value = decoder.decode_value()?;
+                let key_value = dec.decode_value()?;
                 if matches!(key_value, DecodedValue::ContainerEnd) {
                     break;
                 }
@@ -257,7 +280,7 @@ fn decode_value_from_decoded(decoded: DecodedValue<'_>, decoder: &mut Decoder<'_
                     DecodedValue::String(s) => s.to_owned(),
                     _ => return Err(Error::ExpectedObjectKey),
                 };
-                let value = decode_value_recursive(decoder)?;
+                let val = decode_value_recursive(dec)?;
                 // Check for duplicate key
                 if map.contains_key(&key) {
                     match dup_mode {
@@ -266,7 +289,7 @@ fn decode_value_from_decoded(decoded: DecodedValue<'_>, decoder: &mut Decoder<'_
                         DuplicateKeyMode::KeepLast => {}
                     }
                 }
-                map.insert(key, value);
+                map.insert(key, val);
             }
             Ok(Value::Object(map))
         }
@@ -285,6 +308,10 @@ fn decode_value_from_decoded(decoded: DecodedValue<'_>, decoder: &mut Decoder<'_
 /// let bytes = encode_value(&value).unwrap();
 /// assert_eq!(bytes, vec![0x2a]);
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if encoding fails (e.g., NaN/infinity floats in the value).
 pub fn encode_value(value: &Value) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     encode_value_to_writer(&mut buf, value)?;
@@ -292,6 +319,10 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>> {
 }
 
 /// Encode a `Value` to a writer.
+///
+/// # Errors
+///
+/// Returns an error if encoding fails or writing to the writer fails.
 pub fn encode_value_to_writer<W: Write>(writer: W, value: &Value) -> Result<()> {
     let mut encoder = Encoder::new(writer);
     encode_value_recursive(&mut encoder, value)?;
@@ -381,7 +412,8 @@ impl<'de> Deserialize<'de> for Value {
             }
 
             fn visit_u64<E>(self, v: u64) -> std::result::Result<Value, E> {
-                if v <= i64::MAX as u64 {
+                if i64::try_from(v).is_ok() {
+                    #[allow(clippy::cast_possible_wrap)]
                     Ok(Value::Int(v as i64))
                 } else {
                     Ok(Value::UInt(v))

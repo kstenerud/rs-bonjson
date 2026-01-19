@@ -1,6 +1,14 @@
 // ABOUTME: High-performance BONJSON binary encoder.
 // ABOUTME: Uses compiler intrinsics (leading_zeros) for efficient length field encoding.
 
+// Allow intentional casts for binary format encoding - the format requires direct type casting
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use crate::error::{Error, Result};
 use crate::types::{type_code, BigNumber};
 use std::io::Write;
@@ -44,8 +52,7 @@ impl<W: Write> Encoder<W> {
     fn expecting_object_key(&self) -> bool {
         self.containers
             .last()
-            .map(|c| c.is_object && c.expecting_key)
-            .unwrap_or(false)
+            .is_some_and(|c| c.is_object && c.expecting_key)
     }
 
     /// Toggle the key/value expectation in the current object.
@@ -90,7 +97,7 @@ impl<W: Write> Encoder<W> {
     /// Encode a 32-bit float without state checks.
     #[inline]
     pub(crate) fn write_f32_unchecked(&mut self, value: f32) -> Result<()> {
-        self.write_f64_unchecked(value as f64)
+        self.write_f64_unchecked(f64::from(value))
     }
 
     /// Encode a 64-bit float without state checks.
@@ -169,6 +176,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a null value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn write_null(&mut self) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -179,6 +190,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a boolean value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn write_bool(&mut self, value: bool) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -193,6 +208,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode an unsigned integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn write_u64(&mut self, value: u64) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -203,6 +222,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a signed integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn write_i64(&mut self, value: i64) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -213,6 +236,12 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a 64-bit float.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Called when an object key is expected
+    /// - The value is NaN or infinity (not allowed in BONJSON)
     pub fn write_f64(&mut self, value: f64) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -243,24 +272,36 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a 32-bit float.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Called when an object key is expected
+    /// - The value is NaN or infinity (not allowed in BONJSON)
     pub fn write_f32(&mut self, value: f32) -> Result<()> {
-        self.write_f64(value as f64)
+        self.write_f64(f64::from(value))
     }
 
-    /// Encode a BigNumber.
+    /// Encode a `BigNumber`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Called when an object key is expected
+    /// - The exponent is out of the valid range (-0x800000 to 0x7fffff)
     pub fn write_big_number(&mut self, value: BigNumber) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
         }
 
         // Validate exponent range
-        if value.exponent < -0x800000 || value.exponent > 0x7fffff {
+        if value.exponent < -0x0080_0000 || value.exponent > 0x007f_ffff {
             return Err(Error::InvalidData("BigNumber exponent out of range".into()));
         }
 
         self.write_byte(type_code::BIG_NUMBER)?;
 
-        let exp_bytes = required_signed_bytes_min0(value.exponent as i64);
+        let exp_bytes = required_signed_bytes_min0(i64::from(value.exponent));
         let sig_bytes = required_unsigned_bytes_min0(value.significand);
 
         // Header byte: SSSSS EE N
@@ -269,13 +310,13 @@ impl<W: Write> Encoder<W> {
         // N = negative sign (1 bit)
         let header = ((sig_bytes as u8) << 3)
             | ((exp_bytes as u8) << 1)
-            | (if value.sign < 0 { 1 } else { 0 });
+            | u8::from(value.sign < 0);
 
         self.write_byte(header)?;
 
         // Write exponent (little-endian)
         if exp_bytes > 0 {
-            let exp_le = (value.exponent as i64).to_le_bytes();
+            let exp_le = i64::from(value.exponent).to_le_bytes();
             self.write_bytes(&exp_le[..exp_bytes])?;
         }
 
@@ -290,6 +331,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Encode a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if writing fails.
     pub fn write_str(&mut self, value: &str) -> Result<()> {
         let bytes = value.as_bytes();
         let len = bytes.len();
@@ -310,6 +355,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Begin encoding an array.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn begin_array(&mut self) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -323,6 +372,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Begin encoding an object.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
     pub fn begin_object(&mut self) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
@@ -336,6 +389,12 @@ impl<W: Write> Encoder<W> {
     }
 
     /// End the current container (array or object).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - There is no open container to close
+    /// - An object is closed while expecting a value (odd number of elements)
     pub fn end_container(&mut self) -> Result<()> {
         let container = self
             .containers
@@ -353,6 +412,10 @@ impl<W: Write> Encoder<W> {
     }
 
     /// Finish encoding and ensure all containers are closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnclosedContainer`] if there are unclosed containers.
     pub fn finish(self) -> Result<W> {
         if !self.containers.is_empty() {
             return Err(Error::UnclosedContainer);
@@ -389,7 +452,7 @@ impl<W: Write> Encoder<W> {
     /// Write a signed integer using the optimal encoding.
     fn write_signed_int(&mut self, value: i64) -> Result<()> {
         // Small integer range: -100 to 100
-        if value >= -100 && value <= 100 {
+        if (-100..=100).contains(&value) {
             return self.write_byte(value as u8);
         }
 
@@ -418,10 +481,10 @@ impl<W: Write> Encoder<W> {
         let f32_bits = f32_val.to_bits();
 
         // Try bfloat16: truncate f32 to upper 16 bits
-        let bf16_bits = f32_bits & 0xffff0000;
+        let bf16_bits = f32_bits & 0xffff_0000;
         let bf16_as_f32 = f32::from_bits(bf16_bits);
         #[allow(clippy::float_cmp)]
-        if bf16_as_f32 as f64 == value {
+        if f64::from(bf16_as_f32) == value {
             // Can use bfloat16
             self.write_byte(type_code::FLOAT16)?;
             let bytes = ((f32_bits >> 16) as u16).to_le_bytes();
@@ -430,7 +493,7 @@ impl<W: Write> Encoder<W> {
 
         // Try f32
         #[allow(clippy::float_cmp)]
-        if f32_val as f64 == value {
+        if f64::from(f32_val) == value {
             self.write_byte(type_code::FLOAT32)?;
             let bytes = f32_val.to_le_bytes();
             return self.write_bytes(&bytes);
@@ -448,10 +511,10 @@ impl<W: Write> Encoder<W> {
     /// contains trailing 1s terminated by a 0 to indicate the field size.
     fn write_length_field(&mut self, length: u64, continuation: bool) -> Result<()> {
         // Payload = (length << 1) | continuation_bit
-        let payload = (length << 1) | (continuation as u64);
+        let payload = (length << 1) | u64::from(continuation);
 
         // For very large payloads (> 56 bits), use the 9-byte encoding
-        if payload > 0x00ffffffffffffff {
+        if payload > 0x00ff_ffff_ffff_ffff {
             self.write_byte(0xff)?;
             return self.write_bytes(&payload.to_le_bytes());
         }
@@ -464,7 +527,7 @@ impl<W: Write> Encoder<W> {
         let shifted = (payload << (1 + extra_bytes)) | ((1u64 << extra_bytes) - 1);
 
         let bytes = shifted.to_le_bytes();
-        self.write_bytes(&bytes[..extra_bytes + 1])
+        self.write_bytes(&bytes[..=extra_bytes])
     }
 }
 
@@ -538,6 +601,10 @@ fn calc_length_extra_bytes(payload: u64) -> usize {
 // =============================================================================
 
 /// Encode a value to a byte vector.
+///
+/// # Errors
+///
+/// Returns an error if serialization fails (e.g., NaN/infinity floats, I/O errors).
 pub fn to_vec<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     let mut encoder = Encoder::new(&mut buf);

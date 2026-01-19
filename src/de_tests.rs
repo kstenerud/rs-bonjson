@@ -6,8 +6,8 @@ use serde::Deserialize;
 
 #[test]
 fn test_deserialize_primitives() {
-    assert_eq!(from_slice::<bool>(&[0x6f]).unwrap(), true);
-    assert_eq!(from_slice::<bool>(&[0x6e]).unwrap(), false);
+    assert!(from_slice::<bool>(&[0x6f]).unwrap());
+    assert!(!from_slice::<bool>(&[0x6e]).unwrap());
     assert_eq!(from_slice::<i32>(&[0x2a]).unwrap(), 42);
     assert_eq!(
         from_slice::<String>(&[0x85, b'h', b'e', b'l', b'l', b'o']).unwrap(),
@@ -303,8 +303,10 @@ fn test_from_slice_with_config_allow_nul() {
     assert!(from_slice::<String>(&bytes).is_err());
 
     // With allow_nul should succeed
-    let mut config = DecoderConfig::default();
-    config.allow_nul = true;
+    let config = DecoderConfig {
+        allow_nul: true,
+        ..Default::default()
+    };
     let result: String = crate::from_slice_with_config(&bytes, config).unwrap();
     assert_eq!(result, "a\0b");
 }

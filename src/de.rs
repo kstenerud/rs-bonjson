@@ -13,26 +13,34 @@ pub struct Deserializer<'de> {
 
 impl<'de> Deserializer<'de> {
     /// Create a new Deserializer from a byte slice.
-    pub fn from_slice(data: &'de [u8]) -> Self {
+    #[must_use] pub fn from_slice(data: &'de [u8]) -> Self {
         Self {
             decoder: Decoder::new(data),
         }
     }
 
     /// Create a new Deserializer with custom configuration.
-    pub fn from_slice_with_config(data: &'de [u8], config: DecoderConfig) -> Self {
+    #[must_use] pub fn from_slice_with_config(data: &'de [u8], config: DecoderConfig) -> Self {
         Self {
             decoder: Decoder::with_config(data, config),
         }
     }
 
     /// Get the underlying decoder (consumes self).
-    pub fn into_decoder(self) -> Decoder<'de> {
+    #[must_use] pub fn into_decoder(self) -> Decoder<'de> {
         self.decoder
     }
 }
 
 /// Deserialize a value from a BONJSON byte slice.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The document exceeds size limits
+/// - The data is malformed or truncated
+/// - The data doesn't match the expected type `T`
+/// - There are trailing bytes after the value
 pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
     let mut de = Deserializer::from_slice(data);
     de.decoder.check_document_size()?;
@@ -42,6 +50,14 @@ pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
 }
 
 /// Deserialize a value from a BONJSON byte slice with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The document exceeds configured limits
+/// - The data is malformed or truncated
+/// - The data doesn't match the expected type `T`
+/// - There are trailing bytes (unless `allow_trailing_bytes` is set)
 pub fn from_slice_with_config<'de, T: Deserialize<'de>>(
     data: &'de [u8],
     config: DecoderConfig,
@@ -53,7 +69,7 @@ pub fn from_slice_with_config<'de, T: Deserialize<'de>>(
     Ok(value)
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
+impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -296,7 +312,7 @@ impl<'a, 'de> SeqDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> SeqAccess<'de> for SeqDeserializer<'a, 'de> {
+impl<'de> SeqAccess<'de> for SeqDeserializer<'_, 'de> {
     type Error = Error;
 
     fn next_element_seed<T: DeserializeSeed<'de>>(
@@ -321,7 +337,7 @@ impl<'a, 'de> MapDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> MapAccess<'de> for MapDeserializer<'a, 'de> {
+impl<'de> MapAccess<'de> for MapDeserializer<'_, 'de> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
@@ -347,7 +363,7 @@ impl<'a, 'de> UnitVariantDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> de::EnumAccess<'de> for UnitVariantDeserializer<'a, 'de> {
+impl<'de> de::EnumAccess<'de> for UnitVariantDeserializer<'_, 'de> {
     type Error = Error;
     type Variant = Self;
 
@@ -357,7 +373,7 @@ impl<'a, 'de> de::EnumAccess<'de> for UnitVariantDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> de::VariantAccess<'de> for UnitVariantDeserializer<'a, 'de> {
+impl<'de> de::VariantAccess<'de> for UnitVariantDeserializer<'_, 'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {
@@ -391,7 +407,7 @@ impl<'a, 'de> EnumDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> de::EnumAccess<'de> for EnumDeserializer<'a, 'de> {
+impl<'de> de::EnumAccess<'de> for EnumDeserializer<'_, 'de> {
     type Error = Error;
     type Variant = Self;
 
@@ -401,7 +417,7 @@ impl<'a, 'de> de::EnumAccess<'de> for EnumDeserializer<'a, 'de> {
     }
 }
 
-impl<'a, 'de> de::VariantAccess<'de> for EnumDeserializer<'a, 'de> {
+impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
     type Error = Error;
 
     fn unit_variant(self) -> Result<()> {

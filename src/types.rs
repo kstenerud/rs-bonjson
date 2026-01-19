@@ -1,6 +1,14 @@
 // ABOUTME: Defines BONJSON type codes and the BigNumber type.
 // ABOUTME: Type codes map directly to the BONJSON specification byte values.
 
+// Allow intentional casts for BigNumber numeric conversions
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 /// Type codes for BONJSON values.
 /// These match the BONJSON specification exactly.
 pub mod type_code {
@@ -64,55 +72,55 @@ pub mod type_code {
 
     /// Check if a type code is a small integer (-100 to 100)
     #[inline]
-    pub const fn is_small_int(code: u8) -> bool {
+    #[must_use] pub const fn is_small_int(code: u8) -> bool {
         code <= SMALLINT_MAX || code >= SMALLINT_MIN
     }
 
     /// Decode a small integer type code to its value
     #[inline]
-    pub const fn small_int_value(code: u8) -> i8 {
+    #[must_use] pub const fn small_int_value(code: u8) -> i8 {
         code as i8
     }
 
     /// Check if a type code is a short string (0-15 bytes)
     #[inline]
-    pub const fn is_short_string(code: u8) -> bool {
+    #[must_use] pub const fn is_short_string(code: u8) -> bool {
         code >= STRING0 && code <= STRING15
     }
 
     /// Get the length of a short string from its type code
     #[inline]
-    pub const fn short_string_len(code: u8) -> usize {
+    #[must_use] pub const fn short_string_len(code: u8) -> usize {
         (code - STRING0) as usize
     }
 
     /// Check if a type code is an unsigned integer
     #[inline]
-    pub const fn is_unsigned_int(code: u8) -> bool {
+    #[must_use] pub const fn is_unsigned_int(code: u8) -> bool {
         code >= UINT8 && code <= UINT64
     }
 
     /// Get the byte count for an unsigned integer type code
     #[inline]
-    pub const fn unsigned_int_size(code: u8) -> usize {
+    #[must_use] pub const fn unsigned_int_size(code: u8) -> usize {
         (code - UINT8 + 1) as usize
     }
 
     /// Check if a type code is a signed integer
     #[inline]
-    pub const fn is_signed_int(code: u8) -> bool {
+    #[must_use] pub const fn is_signed_int(code: u8) -> bool {
         code >= SINT8 && code <= SINT64
     }
 
     /// Get the byte count for a signed integer type code
     #[inline]
-    pub const fn signed_int_size(code: u8) -> usize {
+    #[must_use] pub const fn signed_int_size(code: u8) -> usize {
         (code - SINT8 + 1) as usize
     }
 
     /// Check if a type code is reserved
     #[inline]
-    pub const fn is_reserved(code: u8) -> bool {
+    #[must_use] pub const fn is_reserved(code: u8) -> bool {
         (code >= RESERVED_65 && code <= RESERVED_67)
             || (code >= RESERVED_90 && code <= RESERVED_98)
     }
@@ -135,14 +143,14 @@ pub struct BigNumber {
 }
 
 impl BigNumber {
-    /// Create a new BigNumber.
+    /// Create a new `BigNumber`.
     ///
     /// # Arguments
     /// * `sign` - The sign: 1 for positive, -1 for negative
     /// * `significand` - The absolute value of the significand
     /// * `exponent` - The base-10 exponent
     #[inline]
-    pub const fn new(sign: i8, significand: u64, exponent: i32) -> Self {
+    #[must_use] pub const fn new(sign: i8, significand: u64, exponent: i32) -> Self {
         Self {
             significand,
             exponent,
@@ -150,33 +158,33 @@ impl BigNumber {
         }
     }
 
-    /// Create a BigNumber representing zero.
+    /// Create a `BigNumber` representing zero.
     #[inline]
-    pub const fn zero() -> Self {
+    #[must_use] pub const fn zero() -> Self {
         Self::new(1, 0, 0)
     }
 
-    /// Create a BigNumber representing negative zero.
+    /// Create a `BigNumber` representing negative zero.
     #[inline]
-    pub const fn neg_zero() -> Self {
+    #[must_use] pub const fn neg_zero() -> Self {
         Self::new(-1, 0, 0)
     }
 
-    /// Check if this BigNumber is zero (positive or negative).
+    /// Check if this `BigNumber` is zero (positive or negative).
     #[inline]
-    pub const fn is_zero(&self) -> bool {
+    #[must_use] pub const fn is_zero(&self) -> bool {
         self.significand == 0
     }
 
-    /// Check if this BigNumber is negative.
+    /// Check if this `BigNumber` is negative.
     #[inline]
-    pub const fn is_negative(&self) -> bool {
+    #[must_use] pub const fn is_negative(&self) -> bool {
         self.sign < 0
     }
 
-    /// Try to convert this BigNumber to an i64.
+    /// Try to convert this `BigNumber` to an i64.
     /// Returns None if the value cannot be represented exactly.
-    pub fn to_i64(&self) -> Option<i64> {
+    #[must_use] pub fn to_i64(&self) -> Option<i64> {
         if self.exponent < 0 {
             return None;
         }
@@ -194,9 +202,9 @@ impl BigNumber {
         }
     }
 
-    /// Try to convert this BigNumber to a u64.
+    /// Try to convert this `BigNumber` to a u64.
     /// Returns None if the value cannot be represented exactly.
-    pub fn to_u64(&self) -> Option<u64> {
+    #[must_use] pub fn to_u64(&self) -> Option<u64> {
         if self.sign < 0 && self.significand != 0 {
             return None;
         }
@@ -211,17 +219,17 @@ impl BigNumber {
         self.significand.checked_mul(multiplier)
     }
 
-    /// Try to convert this BigNumber to an f64.
+    /// Try to convert this `BigNumber` to an f64.
     /// This may lose precision for very large or very precise numbers.
-    pub fn to_f64(&self) -> f64 {
+    #[must_use] pub fn to_f64(&self) -> f64 {
         let sign = if self.sign < 0 { -1.0 } else { 1.0 };
         let significand = self.significand as f64;
         let exponent = 10.0f64.powi(self.exponent);
         sign * significand * exponent
     }
 
-    /// Create a BigNumber from an i64.
-    pub fn from_i64(value: i64) -> Self {
+    /// Create a `BigNumber` from an i64.
+    #[must_use] pub fn from_i64(value: i64) -> Self {
         if value == 0 {
             return Self::zero();
         }
@@ -232,8 +240,8 @@ impl BigNumber {
         Self::new(sign, significand, 0)
     }
 
-    /// Create a BigNumber from a u64.
-    pub fn from_u64(value: u64) -> Self {
+    /// Create a `BigNumber` from a u64.
+    #[must_use] pub fn from_u64(value: u64) -> Self {
         Self::new(1, value, 0)
     }
 }

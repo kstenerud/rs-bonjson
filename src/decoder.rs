@@ -1,6 +1,14 @@
 // ABOUTME: High-performance BONJSON binary decoder.
 // ABOUTME: Uses compiler intrinsics (trailing_zeros) for efficient length field decoding.
 
+// Allow intentional casts for binary format decoding - the format requires direct type casting
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
 
@@ -119,12 +127,12 @@ pub enum DecodedValue<'a> {
 
 impl<'a> Decoder<'a> {
     /// Create a new decoder for the given data.
-    pub fn new(data: &'a [u8]) -> Self {
+    #[must_use] pub fn new(data: &'a [u8]) -> Self {
         Self::with_config(data, DecoderConfig::default())
     }
 
     /// Create a new decoder with custom configuration.
-    pub fn with_config(data: &'a [u8], config: DecoderConfig) -> Self {
+    #[must_use] pub fn with_config(data: &'a [u8], config: DecoderConfig) -> Self {
         Self {
             data,
             pos: 0,
@@ -135,6 +143,10 @@ impl<'a> Decoder<'a> {
     }
 
     /// Check document size limit (called once at start of decoding).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::MaxDocumentSizeExceeded`] if the input exceeds the configured limit.
     #[inline]
     pub fn check_document_size(&self) -> Result<()> {
         if self.data.len() > self.config.max_document_size {
@@ -144,22 +156,22 @@ impl<'a> Decoder<'a> {
     }
 
     /// Get the current position in the input.
-    pub fn position(&self) -> usize {
+    #[must_use] pub fn position(&self) -> usize {
         self.pos
     }
 
     /// Get the remaining bytes.
-    pub fn remaining(&self) -> &'a [u8] {
+    #[must_use] pub fn remaining(&self) -> &'a [u8] {
         &self.data[self.pos..]
     }
 
     /// Check if we've reached the end of input.
-    pub fn is_empty(&self) -> bool {
+    #[must_use] pub fn is_empty(&self) -> bool {
         self.pos >= self.data.len()
     }
 
     /// Get the decoder configuration.
-    pub fn config(&self) -> &DecoderConfig {
+    #[must_use] pub fn config(&self) -> &DecoderConfig {
         &self.config
     }
 
@@ -168,8 +180,7 @@ impl<'a> Decoder<'a> {
     fn expecting_object_key(&self) -> bool {
         self.containers
             .last()
-            .map(|c| c.is_object && c.expecting_key)
-            .unwrap_or(false)
+            .is_some_and(|c| c.is_object && c.expecting_key)
     }
 
     /// Toggle the key/value expectation in the current object.
@@ -315,15 +326,15 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
-    /// Decode an i64 directly, without going through DecodedValue.
+    /// Decode an i64 directly, without going through `DecodedValue`.
     #[inline]
     pub(crate) fn decode_i64_direct(&mut self) -> Result<i64> {
         let tc = self.read_byte()?;
         match tc {
             // Small integers: 0-100
-            0x00..=0x64 => Ok(tc as i64),
+            0x00..=0x64 => Ok(i64::from(tc)),
             // Small negative integers: -100 to -1
-            0x9c..=0xff => Ok(tc as i8 as i64),
+            0x9c..=0xff => Ok(i64::from(tc as i8)),
             // Signed integers
             0x78..=0x7f => {
                 let size = type_code::signed_int_size(tc);
@@ -341,7 +352,7 @@ impl<'a> Decoder<'a> {
                 let mut buf = [0u8; 8];
                 buf[..size].copy_from_slice(bytes);
                 let value = u64::from_le_bytes(buf);
-                if value <= i64::MAX as u64 {
+                if i64::try_from(value).is_ok() {
                     Ok(value as i64)
                 } else {
                     Err(Error::ValueOutOfRange)
@@ -351,13 +362,13 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Decode a u64 directly, without going through DecodedValue.
+    /// Decode a u64 directly, without going through `DecodedValue`.
     #[inline]
     pub(crate) fn decode_u64_direct(&mut self) -> Result<u64> {
         let tc = self.read_byte()?;
         match tc {
             // Small integers: 0-100
-            0x00..=0x64 => Ok(tc as u64),
+            0x00..=0x64 => Ok(u64::from(tc)),
             // Unsigned integers
             0x70..=0x77 => {
                 let size = type_code::unsigned_int_size(tc);
@@ -382,7 +393,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Decode a bool directly, without going through DecodedValue.
+    /// Decode a bool directly, without going through `DecodedValue`.
     #[inline]
     pub(crate) fn decode_bool_direct(&mut self) -> Result<bool> {
         let tc = self.read_byte()?;
@@ -393,7 +404,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Decode a string directly, without going through DecodedValue.
+    /// Decode a string directly, without going through `DecodedValue`.
     #[inline]
     pub(crate) fn decode_str_direct(&mut self) -> Result<&'a str> {
         let tc = self.read_byte()?;
@@ -438,15 +449,15 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Decode an f64 directly, without going through DecodedValue.
+    /// Decode an f64 directly, without going through `DecodedValue`.
     #[inline]
     pub(crate) fn decode_f64_direct(&mut self) -> Result<f64> {
         let tc = self.read_byte()?;
         match tc {
             // Small integers: 0-100
-            0x00..=0x64 => Ok(tc as f64),
+            0x00..=0x64 => Ok(f64::from(tc)),
             // Small negative integers: -100 to -1
-            0x9c..=0xff => Ok((tc as i8) as f64),
+            0x9c..=0xff => Ok(f64::from(tc as i8)),
             // Signed integers
             0x78..=0x7f => {
                 let size = type_code::signed_int_size(tc);
@@ -469,15 +480,15 @@ impl<'a> Decoder<'a> {
             type_code::FLOAT16 => {
                 let bytes = self.read_bytes(2)?;
                 let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
-                let f32_bits = (bits as u32) << 16;
-                let value = f32::from_bits(f32_bits) as f64;
+                let f32_bits = u32::from(bits) << 16;
+                let value = f64::from(f32::from_bits(f32_bits));
                 self.check_float(value)?;
                 Ok(value)
             }
             // Float32
             type_code::FLOAT32 => {
                 let bytes = self.read_bytes(4)?;
-                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+                let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
                 self.check_float(value)?;
                 Ok(value)
             }
@@ -499,7 +510,7 @@ impl<'a> Decoder<'a> {
     fn decode_value_unchecked_with_type(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
         match tc {
             // Small integers: 0-100
-            0x00..=0x64 => Ok(DecodedValue::Int(tc as i64)),
+            0x00..=0x64 => Ok(DecodedValue::Int(i64::from(tc))),
 
             // Reserved
             0x65..=0x67 => Err(Error::InvalidTypeCode(tc)),
@@ -550,7 +561,7 @@ impl<'a> Decoder<'a> {
             type_code::CONTAINER_END => Ok(DecodedValue::ContainerEnd),
 
             // Small negative integers: -100 to -1
-            0x9c..=0xff => Ok(DecodedValue::Int(tc as i8 as i64)),
+            0x9c..=0xff => Ok(DecodedValue::Int(i64::from(tc as i8))),
         }
     }
 
@@ -578,8 +589,8 @@ impl<'a> Decoder<'a> {
     fn decode_float16_unchecked(&mut self) -> Result<DecodedValue<'a>> {
         let bytes = self.read_bytes(2)?;
         let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
-        let f32_bits = (bits as u32) << 16;
-        let value = f32::from_bits(f32_bits) as f64;
+        let f32_bits = u32::from(bits) << 16;
+        let value = f64::from(f32::from_bits(f32_bits));
         self.check_float(value)?;
         Ok(DecodedValue::Float(value))
     }
@@ -587,7 +598,7 @@ impl<'a> Decoder<'a> {
     #[inline]
     fn decode_float32_unchecked(&mut self) -> Result<DecodedValue<'a>> {
         let bytes = self.read_bytes(4)?;
-        let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+        let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
         self.check_float(value)?;
         Ok(DecodedValue::Float(value))
     }
@@ -701,6 +712,15 @@ impl<'a> Decoder<'a> {
     }
 
     /// Decode the next value from the input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The input is truncated
+    /// - An invalid type code is encountered
+    /// - String data contains invalid UTF-8
+    /// - Configured limits (depth, container size, string length) are exceeded
+    /// - A non-string value appears where an object key is expected
     #[inline]
     pub fn decode_value(&mut self) -> Result<DecodedValue<'a>> {
         let type_code = self.read_byte()?;
@@ -730,7 +750,7 @@ impl<'a> Decoder<'a> {
             0x00..=0x64 => {
                 self.toggle_object_state();
                 self.increment_element_count()?;
-                Ok(DecodedValue::Int(tc as i64))
+                Ok(DecodedValue::Int(i64::from(tc)))
             }
 
             // Reserved
@@ -797,7 +817,7 @@ impl<'a> Decoder<'a> {
             0x9c..=0xff => {
                 self.toggle_object_state();
                 self.increment_element_count()?;
-                Ok(DecodedValue::Int(tc as i8 as i64))
+                Ok(DecodedValue::Int(i64::from(tc as i8)))
             }
         }
     }
@@ -836,8 +856,8 @@ impl<'a> Decoder<'a> {
         let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
 
         // bfloat16 is the upper 16 bits of a float32
-        let f32_bits = (bits as u32) << 16;
-        let value = f32::from_bits(f32_bits) as f64;
+        let f32_bits = u32::from(bits) << 16;
+        let value = f64::from(f32::from_bits(f32_bits));
 
         self.check_float(value)?;
         self.toggle_object_state();
@@ -847,7 +867,7 @@ impl<'a> Decoder<'a> {
 
     fn decode_float32(&mut self) -> Result<DecodedValue<'a>> {
         let bytes = self.read_bytes(4)?;
-        let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+        let value = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
 
         self.check_float(value)?;
         self.toggle_object_state();
@@ -1111,9 +1131,9 @@ impl<'a> Decoder<'a> {
 
     /// Decode a length field payload.
     ///
-    /// Returns (length, continuation_bit).
+    /// Returns (length, `continuation_bit`).
     ///
-    /// Uses the trailing_zeros intrinsic for efficient decoding.
+    /// Uses the `trailing_zeros` intrinsic for efficient decoding.
     fn decode_length_field(&mut self) -> Result<(u64, bool)> {
         let header = self.read_byte()?;
 
@@ -1162,6 +1182,12 @@ impl<'a> Decoder<'a> {
     }
 
     /// Finish decoding and check for errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - There are unclosed containers
+    /// - There are trailing bytes (unless `allow_trailing_bytes` is configured)
     pub fn finish(&self) -> Result<()> {
         if !self.containers.is_empty() {
             return Err(Error::UnclosedContainer);
@@ -1306,8 +1332,10 @@ mod tests {
     fn test_allow_nul_true_accepts_nul() {
         // String with NUL byte: "a\0b"
         let data = [0x83, b'a', 0x00, b'b'];
-        let mut config = DecoderConfig::default();
-        config.allow_nul = true;
+        let config = DecoderConfig {
+            allow_nul: true,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
         let result = dec.decode_value().unwrap();
         assert_eq!(result, DecodedValue::String("a\0b"));
@@ -1324,8 +1352,10 @@ mod tests {
         assert!(matches!(dec.decode_value(), Err(Error::NulCharacter)));
 
         // allow_nul should accept
-        let mut config = DecoderConfig::default();
-        config.allow_nul = true;
+        let config = DecoderConfig {
+            allow_nul: true,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("a\0bc"));
     }
@@ -1341,8 +1371,10 @@ mod tests {
     #[test]
     fn test_allow_trailing_bytes_true_accepts() {
         let data = [0x00, 0x00, 0x00]; // int 0 + extra bytes
-        let mut config = DecoderConfig::default();
-        config.allow_trailing_bytes = true;
+        let config = DecoderConfig {
+            allow_trailing_bytes: true,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
         dec.decode_value().unwrap();
         dec.finish().unwrap(); // Should not error
@@ -1351,16 +1383,13 @@ mod tests {
     #[test]
     fn test_max_depth_exceeded() {
         // Create deeply nested arrays: [[[[...]]]]
-        let mut data = Vec::new();
-        for _ in 0..10 {
-            data.push(0x99); // array start
-        }
-        for _ in 0..10 {
-            data.push(0x9b); // container end
-        }
+        let mut data = vec![0x99; 10]; // 10 array starts
+        data.extend(vec![0x9b; 10]); // 10 container ends
 
-        let mut config = DecoderConfig::default();
-        config.max_depth = 5;
+        let config = DecoderConfig {
+            max_depth: 5,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
 
         // Should succeed for first 5 levels
@@ -1374,16 +1403,13 @@ mod tests {
     #[test]
     fn test_max_depth_at_limit() {
         // Create nested arrays at exactly max_depth
-        let mut data = Vec::new();
-        for _ in 0..3 {
-            data.push(0x99); // array start
-        }
-        for _ in 0..3 {
-            data.push(0x9b); // container end
-        }
+        let mut data = vec![0x99; 3]; // 3 array starts
+        data.extend(vec![0x9b; 3]); // 3 container ends
 
-        let mut config = DecoderConfig::default();
-        config.max_depth = 3;
+        let config = DecoderConfig {
+            max_depth: 3,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
 
         // Should succeed for exactly 3 levels
@@ -1401,8 +1427,10 @@ mod tests {
         // Array with 5 elements
         let data = [0x99, 0x00, 0x01, 0x02, 0x03, 0x04, 0x9b];
 
-        let mut config = DecoderConfig::default();
-        config.max_container_size = 3;
+        let config = DecoderConfig {
+            max_container_size: 3,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
 
         assert!(matches!(dec.decode_value().unwrap(), DecodedValue::ArrayStart));
@@ -1420,8 +1448,10 @@ mod tests {
         // Length field: payload = (10 << 1) | 0 = 20, shifted = 20 << 1 = 40 = 0x28
         let data = [0x68, 0x28, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j'];
 
-        let mut config = DecoderConfig::default();
-        config.max_string_length = 5;
+        let config = DecoderConfig {
+            max_string_length: 5,
+            ..Default::default()
+        };
         let mut dec = Decoder::with_config(&data, config);
 
         assert!(matches!(dec.decode_value(), Err(Error::MaxStringLengthExceeded)));
@@ -1431,8 +1461,10 @@ mod tests {
     fn test_max_document_size_exceeded() {
         let data = [0x00; 100]; // 100 bytes
 
-        let mut config = DecoderConfig::default();
-        config.max_document_size = 50;
+        let config = DecoderConfig {
+            max_document_size: 50,
+            ..Default::default()
+        };
         let dec = Decoder::with_config(&data, config);
 
         assert!(matches!(dec.check_document_size(), Err(Error::MaxDocumentSizeExceeded)));
@@ -1442,8 +1474,10 @@ mod tests {
     fn test_max_document_size_at_limit() {
         let data = [0x00; 50]; // exactly 50 bytes
 
-        let mut config = DecoderConfig::default();
-        config.max_document_size = 50;
+        let config = DecoderConfig {
+            max_document_size: 50,
+            ..Default::default()
+        };
         let dec = Decoder::with_config(&data, config);
 
         dec.check_document_size().unwrap(); // Should succeed
@@ -1482,10 +1516,10 @@ mod tests {
     #[test]
     fn test_decode_bool_direct() {
         let mut dec = Decoder::new(&[0x6f]); // true
-        assert_eq!(dec.decode_bool_direct().unwrap(), true);
+        assert!(dec.decode_bool_direct().unwrap());
 
         let mut dec = Decoder::new(&[0x6e]); // false
-        assert_eq!(dec.decode_bool_direct().unwrap(), false);
+        assert!(!dec.decode_bool_direct().unwrap());
     }
 
     #[test]
@@ -1520,11 +1554,11 @@ mod tests {
     #[test]
     fn test_try_consume_container_end() {
         let mut dec = Decoder::new(&[0x9b, 0x00]); // container end, then int 0
-        assert_eq!(dec.try_consume_container_end().unwrap(), true);
+        assert!(dec.try_consume_container_end().unwrap());
         assert_eq!(dec.peek_type_code().unwrap(), 0x00); // Now at int 0
 
         let mut dec = Decoder::new(&[0x00, 0x9b]); // int 0, then container end
-        assert_eq!(dec.try_consume_container_end().unwrap(), false);
+        assert!(!dec.try_consume_container_end().unwrap());
         assert_eq!(dec.peek_type_code().unwrap(), 0x00); // Still at int 0
     }
 
@@ -1549,10 +1583,10 @@ mod tests {
     #[test]
     fn test_is_at_container_end() {
         let dec = Decoder::new(&[0x9b]); // container end
-        assert_eq!(dec.is_at_container_end().unwrap(), true);
+        assert!(dec.is_at_container_end().unwrap());
 
         let dec = Decoder::new(&[0x00]); // int 0
-        assert_eq!(dec.is_at_container_end().unwrap(), false);
+        assert!(!dec.is_at_container_end().unwrap());
     }
 
     // =========================================================================
@@ -1763,7 +1797,7 @@ mod tests {
         // Try to consume container end when there isn't one
         let data = [0x01]; // int 1
         let mut dec = Decoder::new(&data);
-        assert_eq!(dec.try_consume_container_end().unwrap(), false);
+        assert!(!dec.try_consume_container_end().unwrap());
     }
 
     // =========================================================================

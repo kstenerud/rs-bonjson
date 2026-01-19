@@ -73,18 +73,16 @@ fn parse_number_marker(s: &str) -> Value {
             // For now, just use float approximation
             Value::Float(s.parse().unwrap_or(f64::NEG_INFINITY))
         }
-    } else {
-        if let Ok(value) = s.parse::<u64>() {
-            if value <= i64::MAX as u64 {
-                Value::Int(value as i64)
-            } else {
-                Value::UInt(value)
-            }
+    } else if let Ok(value) = s.parse::<u64>() {
+        if value <= i64::MAX as u64 {
+            Value::Int(value as i64)
         } else {
-            // Very large positive number - use BigNumber representation
-            // For now, just use float approximation
-            Value::Float(s.parse().unwrap_or(f64::INFINITY))
+            Value::UInt(value)
         }
+    } else {
+        // Very large positive number - use BigNumber representation
+        // For now, just use float approximation
+        Value::Float(s.parse().unwrap_or(f64::INFINITY))
     }
 }
 

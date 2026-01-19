@@ -1,6 +1,14 @@
 // ABOUTME: Dynamic JSON value type for BONJSON.
 // ABOUTME: Similar to serde_json::Value but includes BigNumber for lossless representation.
 
+// Allow intentional casts for numeric conversions between Value types
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+
 use crate::types::BigNumber;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -9,9 +17,10 @@ use std::fmt;
 ///
 /// This is similar to `serde_json::Value` but includes support for
 /// `BigNumber` to enable lossless round-tripping of arbitrary-precision numbers.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Default)]
 pub enum Value {
     /// JSON null
+    #[default]
     Null,
     /// JSON boolean
     Bool(bool),
@@ -27,23 +36,23 @@ pub enum Value {
     String(String),
     /// A JSON array
     Array(Vec<Value>),
-    /// A JSON object (using BTreeMap for deterministic ordering)
+    /// A JSON object (using `BTreeMap` for deterministic ordering)
     Object(BTreeMap<String, Value>),
 }
 
 impl Value {
     /// Returns true if this value is null.
-    pub fn is_null(&self) -> bool {
+    #[must_use] pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 
     /// Returns true if this value is a boolean.
-    pub fn is_bool(&self) -> bool {
+    #[must_use] pub fn is_bool(&self) -> bool {
         matches!(self, Value::Bool(_))
     }
 
     /// Returns true if this value is any numeric type.
-    pub fn is_number(&self) -> bool {
+    #[must_use] pub fn is_number(&self) -> bool {
         matches!(
             self,
             Value::Int(_) | Value::UInt(_) | Value::Float(_) | Value::BigNumber(_)
@@ -51,22 +60,22 @@ impl Value {
     }
 
     /// Returns true if this value is a string.
-    pub fn is_string(&self) -> bool {
+    #[must_use] pub fn is_string(&self) -> bool {
         matches!(self, Value::String(_))
     }
 
     /// Returns true if this value is an array.
-    pub fn is_array(&self) -> bool {
+    #[must_use] pub fn is_array(&self) -> bool {
         matches!(self, Value::Array(_))
     }
 
     /// Returns true if this value is an object.
-    pub fn is_object(&self) -> bool {
+    #[must_use] pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
 
     /// If this is a boolean, returns the value.
-    pub fn as_bool(&self) -> Option<bool> {
+    #[must_use] pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
             _ => None,
@@ -74,10 +83,10 @@ impl Value {
     }
 
     /// If this is an integer, returns the value as i64.
-    pub fn as_i64(&self) -> Option<i64> {
+    #[must_use] pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
-            Value::UInt(n) if *n <= i64::MAX as u64 => Some(*n as i64),
+            Value::UInt(n) if i64::try_from(*n).is_ok() => Some(*n as i64),
             Value::Float(f) if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 => {
                 Some(*f as i64)
             }
@@ -87,7 +96,7 @@ impl Value {
     }
 
     /// If this is an integer, returns the value as u64.
-    pub fn as_u64(&self) -> Option<u64> {
+    #[must_use] pub fn as_u64(&self) -> Option<u64> {
         match self {
             Value::UInt(n) => Some(*n),
             Value::Int(n) if *n >= 0 => Some(*n as u64),
@@ -100,7 +109,7 @@ impl Value {
     }
 
     /// If this is a number, returns the value as f64.
-    pub fn as_f64(&self) -> Option<f64> {
+    #[must_use] pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Float(f) => Some(*f),
             Value::Int(n) => Some(*n as f64),
@@ -111,7 +120,7 @@ impl Value {
     }
 
     /// If this is a string, returns a reference to it.
-    pub fn as_str(&self) -> Option<&str> {
+    #[must_use] pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
             _ => None,
@@ -119,7 +128,7 @@ impl Value {
     }
 
     /// If this is an array, returns a reference to it.
-    pub fn as_array(&self) -> Option<&Vec<Value>> {
+    #[must_use] pub fn as_array(&self) -> Option<&Vec<Value>> {
         match self {
             Value::Array(a) => Some(a),
             _ => None,
@@ -135,7 +144,7 @@ impl Value {
     }
 
     /// If this is an object, returns a reference to it.
-    pub fn as_object(&self) -> Option<&BTreeMap<String, Value>> {
+    #[must_use] pub fn as_object(&self) -> Option<&BTreeMap<String, Value>> {
         match self {
             Value::Object(o) => Some(o),
             _ => None,
@@ -151,19 +160,13 @@ impl Value {
     }
 
     /// Index into an array. Returns None if not an array or index out of bounds.
-    pub fn get(&self, index: usize) -> Option<&Value> {
+    #[must_use] pub fn get(&self, index: usize) -> Option<&Value> {
         self.as_array().and_then(|a| a.get(index))
     }
 
     /// Index into an object by key. Returns None if not an object or key not found.
-    pub fn get_key(&self, key: &str) -> Option<&Value> {
+    #[must_use] pub fn get_key(&self, key: &str) -> Option<&Value> {
         self.as_object().and_then(|o| o.get(key))
-    }
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Value::Null
     }
 }
 
@@ -171,12 +174,12 @@ impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Null => write!(f, "Null"),
-            Value::Bool(b) => write!(f, "Bool({})", b),
-            Value::Int(n) => write!(f, "Int({})", n),
-            Value::UInt(n) => write!(f, "UInt({})", n),
-            Value::Float(n) => write!(f, "Float({})", n),
-            Value::BigNumber(bn) => write!(f, "BigNumber({:?})", bn),
-            Value::String(s) => write!(f, "String({:?})", s),
+            Value::Bool(b) => write!(f, "Bool({b})"),
+            Value::Int(n) => write!(f, "Int({n})"),
+            Value::UInt(n) => write!(f, "UInt({n})"),
+            Value::Float(n) => write!(f, "Float({n})"),
+            Value::BigNumber(bn) => write!(f, "BigNumber({bn:?})"),
+            Value::String(s) => write!(f, "String({s:?})"),
             Value::Array(a) => f.debug_tuple("Array").field(a).finish(),
             Value::Object(o) => f.debug_tuple("Object").field(o).finish(),
         }
@@ -188,12 +191,12 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::Null => write!(f, "null"),
-            Value::Bool(b) => write!(f, "{}", b),
-            Value::Int(n) => write!(f, "{}", n),
-            Value::UInt(n) => write!(f, "{}", n),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Int(n) => write!(f, "{n}"),
+            Value::UInt(n) => write!(f, "{n}"),
             Value::Float(n) => {
                 if n.is_finite() {
-                    write!(f, "{}", n)
+                    write!(f, "{n}")
                 } else if n.is_nan() {
                     write!(f, "NaN")
                 } else if n.is_sign_positive() {
@@ -208,7 +211,7 @@ impl fmt::Display for Value {
                     write!(f, "-")?;
                 }
                 write!(f, "{}e{}", bn.significand, bn.exponent)?;
-                write!(f, " (≈{})", val)
+                write!(f, " (≈{val})")
             }
             Value::String(s) => write!(f, "\"{}\"", s.escape_default()),
             Value::Array(a) => {
@@ -217,7 +220,7 @@ impl fmt::Display for Value {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", v)?;
+                    write!(f, "{v}")?;
                 }
                 write!(f, "]")
             }
@@ -244,19 +247,19 @@ impl From<bool> for Value {
 
 impl From<i8> for Value {
     fn from(n: i8) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
 impl From<i16> for Value {
     fn from(n: i16) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
 impl From<i32> for Value {
     fn from(n: i32) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
@@ -268,25 +271,25 @@ impl From<i64> for Value {
 
 impl From<u8> for Value {
     fn from(n: u8) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
 impl From<u16> for Value {
     fn from(n: u16) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
 impl From<u32> for Value {
     fn from(n: u32) -> Self {
-        Value::Int(n as i64)
+        Value::Int(i64::from(n))
     }
 }
 
 impl From<u64> for Value {
     fn from(n: u64) -> Self {
-        if n <= i64::MAX as u64 {
+        if i64::try_from(n).is_ok() {
             Value::Int(n as i64)
         } else {
             Value::UInt(n)
@@ -296,7 +299,7 @@ impl From<u64> for Value {
 
 impl From<f32> for Value {
     fn from(n: f32) -> Self {
-        Value::Float(n as f64)
+        Value::Float(f64::from(n))
     }
 }
 

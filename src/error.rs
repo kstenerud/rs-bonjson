@@ -14,63 +14,63 @@ pub enum Error {
     Truncated,
 
     /// Unconsumed bytes after decoding a complete document.
-    /// Test spec: "trailing_bytes"
+    /// Test spec: "`trailing_bytes`"
     TrailingBytes,
 
     /// Unrecognized or reserved type code encountered.
-    /// Test spec: "invalid_type_code"
+    /// Test spec: "`invalid_type_code`"
     InvalidTypeCode(u8),
 
     /// Invalid UTF-8 byte sequence in string.
-    /// Test spec: "invalid_utf8"
+    /// Test spec: "`invalid_utf8`"
     InvalidUtf8,
 
     /// NUL (0x00) byte in string (rejected by default).
-    /// Test spec: "nul_character"
+    /// Test spec: "`nul_character`"
     NulCharacter,
 
     /// Duplicate key in object.
-    /// Test spec: "duplicate_key"
+    /// Test spec: "`duplicate_key`"
     DuplicateKey,
 
     /// Missing container end marker.
-    /// Test spec: "unclosed_container"
+    /// Test spec: "`unclosed_container`"
     UnclosedContainer,
 
-    /// Generic invalid data (e.g., NaN in float, invalid BigNumber).
-    /// Test spec: "invalid_data"
+    /// Generic invalid data (e.g., NaN in float, invalid `BigNumber`).
+    /// Test spec: "`invalid_data`"
     InvalidData(String),
 
     /// Value exceeds allowed range.
-    /// Test spec: "value_out_of_range"
+    /// Test spec: "`value_out_of_range`"
     ValueOutOfRange,
 
     /// Non-canonical (oversized) length encoding.
-    /// Test spec: "non_canonical_length"
+    /// Test spec: "`non_canonical_length`"
     NonCanonicalLength,
 
     /// String exceeds chunk count limit.
-    /// Test spec: "too_many_chunks"
+    /// Test spec: "`too_many_chunks`"
     TooManyChunks,
 
     /// Zero-length chunk with continuation bit set.
-    /// Test spec: "empty_chunk_continuation"
+    /// Test spec: "`empty_chunk_continuation`"
     EmptyChunkContinuation,
 
     /// Container nesting too deep.
-    /// Test spec: "max_depth_exceeded"
+    /// Test spec: "`max_depth_exceeded`"
     MaxDepthExceeded,
 
     /// String exceeds length limit.
-    /// Test spec: "max_string_length_exceeded"
+    /// Test spec: "`max_string_length_exceeded`"
     MaxStringLengthExceeded,
 
     /// Container has too many elements.
-    /// Test spec: "max_container_size_exceeded"
+    /// Test spec: "`max_container_size_exceeded`"
     MaxContainerSizeExceeded,
 
     /// Document exceeds size limit.
-    /// Test spec: "max_document_size_exceeded"
+    /// Test spec: "`max_document_size_exceeded`"
     MaxDocumentSizeExceeded,
 
     /// Tried to close more containers than were opened.
@@ -93,18 +93,18 @@ impl Error {
     /// Create a Truncated error. Marked cold to help branch prediction.
     #[cold]
     #[inline(never)]
-    pub fn truncated() -> Self {
+    #[must_use] pub fn truncated() -> Self {
         Error::Truncated
     }
 
-    /// Create an InvalidTypeCode error. Marked cold to help branch prediction.
+    /// Create an `InvalidTypeCode` error. Marked cold to help branch prediction.
     #[cold]
     #[inline(never)]
-    pub fn invalid_type_code(code: u8) -> Self {
+    #[must_use] pub fn invalid_type_code(code: u8) -> Self {
         Error::InvalidTypeCode(code)
     }
 
-    /// Create an InvalidData error. Marked cold to help branch prediction.
+    /// Create an `InvalidData` error. Marked cold to help branch prediction.
     #[cold]
     #[inline(never)]
     pub fn invalid_data(msg: impl Into<String>) -> Self {
@@ -112,7 +112,7 @@ impl Error {
     }
 
     /// Returns the standardized error type name for test matching.
-    pub fn error_type(&self) -> &'static str {
+    #[must_use] pub fn error_type(&self) -> &'static str {
         match self {
             Error::Truncated => "truncated",
             Error::TrailingBytes => "trailing_bytes",
@@ -144,12 +144,12 @@ impl fmt::Display for Error {
         match self {
             Error::Truncated => write!(f, "unexpected end of input"),
             Error::TrailingBytes => write!(f, "trailing bytes after document"),
-            Error::InvalidTypeCode(code) => write!(f, "invalid type code: 0x{:02x}", code),
+            Error::InvalidTypeCode(code) => write!(f, "invalid type code: 0x{code:02x}"),
             Error::InvalidUtf8 => write!(f, "invalid UTF-8 sequence"),
             Error::NulCharacter => write!(f, "NUL character in string"),
             Error::DuplicateKey => write!(f, "duplicate key in object"),
             Error::UnclosedContainer => write!(f, "unclosed container"),
-            Error::InvalidData(msg) => write!(f, "invalid data: {}", msg),
+            Error::InvalidData(msg) => write!(f, "invalid data: {msg}"),
             Error::ValueOutOfRange => write!(f, "value out of range"),
             Error::NonCanonicalLength => write!(f, "non-canonical length encoding"),
             Error::TooManyChunks => write!(f, "too many string chunks"),
@@ -163,8 +163,8 @@ impl fmt::Display for Error {
             Error::UnbalancedContainers => write!(f, "tried to close too many containers"),
             Error::ExpectedObjectKey => write!(f, "expected object key (string)"),
             Error::ExpectedObjectValue => write!(f, "expected object value"),
-            Error::Io(msg) => write!(f, "I/O error: {}", msg),
-            Error::Custom(msg) => write!(f, "{}", msg),
+            Error::Io(msg) => write!(f, "I/O error: {msg}"),
+            Error::Custom(msg) => write!(f, "{msg}"),
         }
     }
 }

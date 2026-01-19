@@ -9,7 +9,7 @@ fn test_value_types() {
     assert!(Value::Null.is_null());
     assert!(Value::Bool(true).is_bool());
     assert!(Value::Int(42).is_number());
-    assert!(Value::Float(3.14).is_number());
+    assert!(Value::Float(2.5).is_number());
     assert!(Value::String("hello".into()).is_string());
     assert!(Value::Array(vec![]).is_array());
     assert!(Value::Object(BTreeMap::new()).is_object());
@@ -20,7 +20,7 @@ fn test_value_accessors() {
     assert_eq!(Value::Bool(true).as_bool(), Some(true));
     assert_eq!(Value::Int(42).as_i64(), Some(42));
     assert_eq!(Value::UInt(100).as_u64(), Some(100));
-    assert_eq!(Value::Float(3.14).as_f64(), Some(3.14));
+    assert_eq!(Value::Float(2.5).as_f64(), Some(2.5));
     assert_eq!(Value::String("hello".into()).as_str(), Some("hello"));
 }
 

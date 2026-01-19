@@ -18,7 +18,7 @@ impl<'a, W: Write> Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
+impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
     type SerializeSeq = Self;
@@ -34,15 +34,15 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
-        self.encoder.write_i64_unchecked(v as i64)
+        self.encoder.write_i64_unchecked(i64::from(v))
     }
 
     fn serialize_i16(self, v: i16) -> Result<()> {
-        self.encoder.write_i64_unchecked(v as i64)
+        self.encoder.write_i64_unchecked(i64::from(v))
     }
 
     fn serialize_i32(self, v: i32) -> Result<()> {
-        self.encoder.write_i64_unchecked(v as i64)
+        self.encoder.write_i64_unchecked(i64::from(v))
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
@@ -50,15 +50,15 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
-        self.encoder.write_u64_unchecked(v as u64)
+        self.encoder.write_u64_unchecked(u64::from(v))
     }
 
     fn serialize_u16(self, v: u16) -> Result<()> {
-        self.encoder.write_u64_unchecked(v as u64)
+        self.encoder.write_u64_unchecked(u64::from(v))
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        self.encoder.write_u64_unchecked(v as u64)
+        self.encoder.write_u64_unchecked(u64::from(v))
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
@@ -87,7 +87,7 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
         // Encode bytes as an array of integers
         self.encoder.begin_array_unchecked()?;
         for &byte in v {
-            self.encoder.write_u64_unchecked(byte as u64)?;
+            self.encoder.write_u64_unchecked(u64::from(byte))?;
         }
         self.encoder.end_container_unchecked()
     }
@@ -194,7 +194,7 @@ impl<'a, W: Write> ser::Serializer for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeSeq for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -207,7 +207,7 @@ impl<'a, W: Write> ser::SerializeSeq for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeTuple for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeTuple for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -220,7 +220,7 @@ impl<'a, W: Write> ser::SerializeTuple for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeTupleStruct for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeTupleStruct for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -233,7 +233,7 @@ impl<'a, W: Write> ser::SerializeTupleStruct for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeTupleVariant for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeTupleVariant for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -247,7 +247,7 @@ impl<'a, W: Write> ser::SerializeTupleVariant for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeMap for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeMap for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -264,7 +264,7 @@ impl<'a, W: Write> ser::SerializeMap for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeStruct for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeStruct for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -282,7 +282,7 @@ impl<'a, W: Write> ser::SerializeStruct for &mut Serializer<'a, W> {
     }
 }
 
-impl<'a, W: Write> ser::SerializeStructVariant for &mut Serializer<'a, W> {
+impl<W: Write> ser::SerializeStructVariant for &mut Serializer<'_, W> {
     type Ok = ();
     type Error = Error;
 
@@ -306,7 +306,7 @@ struct MapKeySerializer<'a, 'b, W: Write> {
     ser: &'a mut Serializer<'b, W>,
 }
 
-impl<'a, 'b, W: Write> ser::Serializer for MapKeySerializer<'a, 'b, W> {
+impl<W: Write> ser::Serializer for MapKeySerializer<'_, '_, W> {
     type Ok = ();
     type Error = Error;
     type SerializeSeq = ser::Impossible<(), Error>;
