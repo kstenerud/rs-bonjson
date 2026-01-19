@@ -9,8 +9,6 @@ use serde::Deserialize;
 /// A serde Deserializer that reads BONJSON.
 pub struct Deserializer<'de> {
     decoder: Decoder<'de>,
-    /// Peeked value for look-ahead
-    peeked: Option<DecodedValue<'de>>,
 }
 
 impl<'de> Deserializer<'de> {
@@ -18,7 +16,6 @@ impl<'de> Deserializer<'de> {
     pub fn from_slice(data: &'de [u8]) -> Self {
         Self {
             decoder: Decoder::new(data),
-            peeked: None,
         }
     }
 
@@ -26,27 +23,12 @@ impl<'de> Deserializer<'de> {
     pub fn from_slice_with_config(data: &'de [u8], config: DecoderConfig) -> Self {
         Self {
             decoder: Decoder::with_config(data, config),
-            peeked: None,
         }
     }
 
     /// Get the underlying decoder (consumes self).
     pub fn into_decoder(self) -> Decoder<'de> {
         self.decoder
-    }
-
-    fn peek_value(&mut self) -> Result<&DecodedValue<'de>> {
-        if self.peeked.is_none() {
-            self.peeked = Some(self.decoder.decode_value_unchecked()?);
-        }
-        Ok(self.peeked.as_ref().unwrap())
-    }
-
-    fn next_value(&mut self) -> Result<DecodedValue<'de>> {
-        match self.peeked.take() {
-            Some(v) => Ok(v),
-            None => self.decoder.decode_value_unchecked(),
-        }
     }
 }
 
@@ -75,7 +57,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     type Error = Error;
 
     fn deserialize_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
+        match self.decoder.decode_value_unchecked()? {
             DecodedValue::Null => visitor.visit_unit(),
             DecodedValue::Bool(b) => visitor.visit_bool(b),
             DecodedValue::Int(n) => visitor.visit_i64(n),
@@ -150,15 +132,11 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::String(s) => {
-                let mut chars = s.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None) => visitor.visit_char(c),
-                    _ => Err(Error::Custom("expected single character".into())),
-                }
-            }
-            _ => Err(Error::Custom("expected string".into())),
+        let s = self.decoder.decode_str_direct()?;
+        let mut chars = s.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => visitor.visit_char(c),
+            _ => Err(Error::Custom("expected single character".into())),
         }
     }
 
@@ -171,22 +149,30 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        // Try to decode as an array of integers
-        match self.next_value()? {
-            DecodedValue::ArrayStart => {
-                let mut bytes = Vec::new();
-                loop {
-                    match self.decoder.decode_value_unchecked()? {
-                        DecodedValue::ContainerEnd => break,
-                        DecodedValue::Int(n) if n >= 0 && n <= 255 => bytes.push(n as u8),
-                        DecodedValue::UInt(n) if n <= 255 => bytes.push(n as u8),
-                        _ => return Err(Error::Custom("expected byte array".into())),
-                    }
-                }
-                visitor.visit_bytes(&bytes)
+        // Expect array start
+        self.decoder.expect_array_start()?;
+        let mut bytes = Vec::new();
+        loop {
+            if self.decoder.is_at_container_end()? {
+                self.decoder.skip_byte(); // skip container end
+                break;
             }
-            _ => Err(Error::Custom("expected array of bytes".into())),
+            // Each element should be a small integer 0-255
+            let tc = self.decoder.peek_type_code()?;
+            if tc <= 100 {
+                // Small int 0-100
+                self.decoder.skip_byte();
+                bytes.push(tc);
+            } else if tc == 0x70 {
+                // uint8 (values 101-255)
+                self.decoder.skip_byte();
+                let b = self.decoder.read_byte_unchecked();
+                bytes.push(b);
+            } else {
+                return Err(Error::Custom("expected byte array".into()));
+            }
         }
+        visitor.visit_bytes(&bytes)
     }
 
     fn deserialize_byte_buf<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -204,9 +190,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::Null => visitor.visit_unit(),
-            _ => Err(Error::Custom("expected null".into())),
+        // Expect null type code directly
+        if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
+            self.decoder.skip_byte();
+            visitor.visit_unit()
+        } else {
+            Err(Error::Custom("expected null".into()))
         }
     }
 
@@ -314,9 +303,8 @@ impl<'a, 'de> SeqAccess<'de> for SeqDeserializer<'a, 'de> {
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>> {
-        // Use direct container end check - avoids peek/decode/match overhead
-        if self.de.decoder.is_at_container_end()? {
-            self.de.decoder.skip_container_end()?;
+        // Single check+consume operation
+        if self.de.decoder.try_consume_container_end()? {
             return Ok(None);
         }
         seed.deserialize(&mut *self.de).map(Some)
@@ -337,9 +325,8 @@ impl<'a, 'de> MapAccess<'de> for MapDeserializer<'a, 'de> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
-        // Use direct container end check - avoids peek/decode/match overhead
-        if self.de.decoder.is_at_container_end()? {
-            self.de.decoder.skip_container_end()?;
+        // Single check+consume operation
+        if self.de.decoder.try_consume_container_end()? {
             return Ok(None);
         }
         seed.deserialize(&mut *self.de).map(Some)
@@ -424,25 +411,19 @@ impl<'a, 'de> de::VariantAccess<'de> for EnumDeserializer<'a, 'de> {
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
         let value = seed.deserialize(&mut *self.de)?;
         // Consume the closing container end
-        match self.de.next_value()? {
-            DecodedValue::ContainerEnd => Ok(value),
-            _ => Err(Error::Custom("expected container end".into())),
-        }
+        self.de.decoder.skip_container_end()
+            .map_err(|_| Error::Custom("expected container end".into()))?;
+        Ok(value)
     }
 
     fn tuple_variant<V: Visitor<'de>>(self, _len: usize, visitor: V) -> Result<V::Value> {
-        match self.de.next_value()? {
-            DecodedValue::ArrayStart => {
-                let seq = SeqDeserializer::new(self.de);
-                let value = visitor.visit_seq(seq)?;
-                // Consume the closing container end
-                match self.de.next_value()? {
-                    DecodedValue::ContainerEnd => Ok(value),
-                    _ => Err(Error::Custom("expected container end".into())),
-                }
-            }
-            _ => Err(Error::Custom("expected array for tuple variant".into())),
-        }
+        self.de.decoder.expect_array_start()?;
+        let seq = SeqDeserializer::new(self.de);
+        let value = visitor.visit_seq(seq)?;
+        // Consume the closing container end (for outer object)
+        self.de.decoder.skip_container_end()
+            .map_err(|_| Error::Custom("expected container end".into()))?;
+        Ok(value)
     }
 
     fn struct_variant<V: Visitor<'de>>(
@@ -450,18 +431,13 @@ impl<'a, 'de> de::VariantAccess<'de> for EnumDeserializer<'a, 'de> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
-        match self.de.next_value()? {
-            DecodedValue::ObjectStart => {
-                let map = MapDeserializer::new(self.de);
-                let value = visitor.visit_map(map)?;
-                // Consume the closing container end
-                match self.de.next_value()? {
-                    DecodedValue::ContainerEnd => Ok(value),
-                    _ => Err(Error::Custom("expected container end".into())),
-                }
-            }
-            _ => Err(Error::Custom("expected object for struct variant".into())),
-        }
+        self.de.decoder.expect_object_start()?;
+        let map = MapDeserializer::new(self.de);
+        let value = visitor.visit_map(map)?;
+        // Consume the closing container end (for outer object)
+        self.de.decoder.skip_container_end()
+            .map_err(|_| Error::Custom("expected container end".into()))?;
+        Ok(value)
     }
 }
 

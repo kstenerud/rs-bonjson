@@ -78,9 +78,21 @@ The project uses a layered architecture:
 ## Key Design Decisions
 
 ### Performance Optimizations
-- Length field encoding uses trailing-1-bits pattern, decoded with `trailing_zeros()` intrinsic
+
+#### Encoder (ser.rs, encoder.rs)
+- Length field encoding uses trailing-1-bits pattern, encoded with `trailing_zeros()` intrinsic
 - bfloat16 used when float values can be exactly represented in fewer bytes
+- Pre-allocates output buffer based on input estimate
+- Uses unchecked write methods for serde path (bounds already validated)
+- Inline hints on hot paths
+
+#### Decoder (de.rs, decoder.rs)
 - Zero-copy string decoding for single-chunk strings
+- Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum - avoids intermediate allocation and match overhead
+- `try_consume_container_end()` combines bounds check, container-end check, and position increment into one operation
+- Short ASCII strings (≤32 bytes) skip UTF-8 validation since ASCII is always valid UTF-8
+- Length field decoding uses `trailing_zeros()` intrinsic
+- Serde path uses unchecked methods that skip container state tracking
 - Inline hints on hot paths
 
 ### Compliance Levels

@@ -4,6 +4,20 @@
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
 
+/// Check if all bytes are ASCII (1-127, no NUL or high bytes).
+/// For short strings, this is faster than full UTF-8 validation.
+#[inline]
+fn is_short_ascii_no_nul(bytes: &[u8]) -> bool {
+    // Only efficient for short strings (up to 16 bytes)
+    // For longer strings, the full validation is likely faster
+    for &b in bytes {
+        if b == 0 || b >= 128 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Validate UTF-8 and check for NUL bytes.
 /// Uses stdlib's optimized UTF-8 validation combined with NUL check.
 #[inline]
@@ -195,6 +209,14 @@ impl<'a> Decoder<'a> {
         self.pos += 1;
     }
 
+    /// Read a byte without bounds checking (caller must ensure there's data).
+    #[inline]
+    pub(crate) fn read_byte_unchecked(&mut self) -> u8 {
+        let b = self.data[self.pos];
+        self.pos += 1;
+        b
+    }
+
     /// Read a single byte, advancing position.
     #[inline]
     fn read_byte(&mut self) -> Result<u8> {
@@ -242,17 +264,37 @@ impl<'a> Decoder<'a> {
     /// Check if next value is container end (without consuming).
     #[inline]
     pub(crate) fn is_at_container_end(&self) -> Result<bool> {
-        Ok(self.peek_type_code()? == type_code::CONTAINER_END)
+        if self.pos >= self.data.len() {
+            return Err(Error::Truncated);
+        }
+        Ok(self.data[self.pos] == type_code::CONTAINER_END)
     }
 
-    /// Skip the container end marker.
+    /// Skip the container end marker (assumes caller verified it's container end).
     #[inline]
     pub(crate) fn skip_container_end(&mut self) -> Result<()> {
-        let tc = self.read_byte()?;
-        if tc != type_code::CONTAINER_END {
+        if self.pos >= self.data.len() {
+            return Err(Error::Truncated);
+        }
+        if self.data[self.pos] != type_code::CONTAINER_END {
             return Err(Error::Custom("expected container end".into()));
         }
+        self.pos += 1;
         Ok(())
+    }
+
+    /// Check and consume container end in one operation - returns true if consumed.
+    #[inline]
+    pub(crate) fn try_consume_container_end(&mut self) -> Result<bool> {
+        if self.pos >= self.data.len() {
+            return Err(Error::Truncated);
+        }
+        if self.data[self.pos] == type_code::CONTAINER_END {
+            self.pos += 1;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Expect and skip an array start marker.
@@ -361,6 +403,12 @@ impl<'a> Decoder<'a> {
             0x80..=0x8f => {
                 let len = type_code::short_string_len(tc);
                 let bytes = self.read_bytes(len)?;
+                // Fast path: short ASCII strings don't need UTF-8 validation
+                // Short strings (up to 15 bytes) are common for field names
+                if !self.config.allow_nul && is_short_ascii_no_nul(bytes) {
+                    // SAFETY: ASCII bytes are always valid UTF-8
+                    return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+                }
                 if self.config.allow_nul {
                     Ok(std::str::from_utf8(bytes)?)
                 } else {
@@ -374,6 +422,12 @@ impl<'a> Decoder<'a> {
                 }
                 let bytes = self.read_bytes(length as usize)?;
                 if !continuation {
+                    // Fast path only for short strings (≤32 bytes)
+                    // Longer strings should use stdlib's optimized validation
+                    if !self.config.allow_nul && bytes.len() <= 32 && is_short_ascii_no_nul(bytes) {
+                        // SAFETY: ASCII bytes are always valid UTF-8
+                        return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+                    }
                     return if self.config.allow_nul {
                         Ok(std::str::from_utf8(bytes)?)
                     } else {
@@ -559,6 +613,11 @@ impl<'a> Decoder<'a> {
     fn decode_short_string_unchecked(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
         let len = type_code::short_string_len(tc);
         let bytes = self.read_bytes(len)?;
+        // Fast path: short ASCII strings don't need UTF-8 validation
+        if !self.config.allow_nul && is_short_ascii_no_nul(bytes) {
+            // SAFETY: ASCII bytes are always valid UTF-8
+            return Ok(DecodedValue::String(unsafe { std::str::from_utf8_unchecked(bytes) }));
+        }
         let s = if self.config.allow_nul {
             std::str::from_utf8(bytes)?
         } else {
@@ -575,6 +634,11 @@ impl<'a> Decoder<'a> {
         }
         let bytes = self.read_bytes(length as usize)?;
         if !continuation {
+            // Fast path only for short strings (≤32 bytes)
+            if !self.config.allow_nul && bytes.len() <= 32 && is_short_ascii_no_nul(bytes) {
+                // SAFETY: ASCII bytes are always valid UTF-8
+                return Ok(DecodedValue::String(unsafe { std::str::from_utf8_unchecked(bytes) }));
+            }
             let s = if self.config.allow_nul {
                 std::str::from_utf8(bytes)?
             } else {
