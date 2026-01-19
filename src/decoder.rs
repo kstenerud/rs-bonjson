@@ -1176,6 +1176,7 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Encoder;
 
     #[test]
     fn test_decode_small_ints() {
@@ -1287,5 +1288,525 @@ mod tests {
         let mut dec = Decoder::new(&[0x00, 0x00]); // Extra byte
         dec.decode_value().unwrap();
         assert!(matches!(dec.finish(), Err(Error::TrailingBytes)));
+    }
+
+    // =========================================================================
+    // DecoderConfig option tests
+    // =========================================================================
+
+    #[test]
+    fn test_allow_nul_false_rejects_nul() {
+        // String with NUL byte: "a\0b"
+        let data = [0x83, b'a', 0x00, b'b'];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::NulCharacter)));
+    }
+
+    #[test]
+    fn test_allow_nul_true_accepts_nul() {
+        // String with NUL byte: "a\0b"
+        let data = [0x83, b'a', 0x00, b'b'];
+        let mut config = DecoderConfig::default();
+        config.allow_nul = true;
+        let mut dec = Decoder::with_config(&data, config);
+        let result = dec.decode_value().unwrap();
+        assert_eq!(result, DecodedValue::String("a\0b"));
+    }
+
+    #[test]
+    fn test_allow_nul_in_long_string() {
+        // Long string with NUL: length=4, "a\0bc"
+        // Length field: payload = (4 << 1) | 0 = 8, shifted = 8 << 1 = 16 = 0x10
+        let data = [0x68, 0x10, b'a', 0x00, b'b', b'c'];
+
+        // Default config should reject
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::NulCharacter)));
+
+        // allow_nul should accept
+        let mut config = DecoderConfig::default();
+        config.allow_nul = true;
+        let mut dec = Decoder::with_config(&data, config);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("a\0bc"));
+    }
+
+    #[test]
+    fn test_allow_trailing_bytes_false_rejects() {
+        let data = [0x00, 0x00]; // int 0 + extra byte
+        let mut dec = Decoder::new(&data);
+        dec.decode_value().unwrap();
+        assert!(matches!(dec.finish(), Err(Error::TrailingBytes)));
+    }
+
+    #[test]
+    fn test_allow_trailing_bytes_true_accepts() {
+        let data = [0x00, 0x00, 0x00]; // int 0 + extra bytes
+        let mut config = DecoderConfig::default();
+        config.allow_trailing_bytes = true;
+        let mut dec = Decoder::with_config(&data, config);
+        dec.decode_value().unwrap();
+        dec.finish().unwrap(); // Should not error
+    }
+
+    #[test]
+    fn test_max_depth_exceeded() {
+        // Create deeply nested arrays: [[[[...]]]]
+        let mut data = Vec::new();
+        for _ in 0..10 {
+            data.push(0x99); // array start
+        }
+        for _ in 0..10 {
+            data.push(0x9b); // container end
+        }
+
+        let mut config = DecoderConfig::default();
+        config.max_depth = 5;
+        let mut dec = Decoder::with_config(&data, config);
+
+        // Should succeed for first 5 levels
+        for _ in 0..5 {
+            assert!(matches!(dec.decode_value().unwrap(), DecodedValue::ArrayStart));
+        }
+        // 6th level should fail
+        assert!(matches!(dec.decode_value(), Err(Error::MaxDepthExceeded)));
+    }
+
+    #[test]
+    fn test_max_depth_at_limit() {
+        // Create nested arrays at exactly max_depth
+        let mut data = Vec::new();
+        for _ in 0..3 {
+            data.push(0x99); // array start
+        }
+        for _ in 0..3 {
+            data.push(0x9b); // container end
+        }
+
+        let mut config = DecoderConfig::default();
+        config.max_depth = 3;
+        let mut dec = Decoder::with_config(&data, config);
+
+        // Should succeed for exactly 3 levels
+        for _ in 0..3 {
+            assert!(matches!(dec.decode_value().unwrap(), DecodedValue::ArrayStart));
+        }
+        for _ in 0..3 {
+            assert!(matches!(dec.decode_value().unwrap(), DecodedValue::ContainerEnd));
+        }
+        dec.finish().unwrap();
+    }
+
+    #[test]
+    fn test_max_container_size_exceeded() {
+        // Array with 5 elements
+        let data = [0x99, 0x00, 0x01, 0x02, 0x03, 0x04, 0x9b];
+
+        let mut config = DecoderConfig::default();
+        config.max_container_size = 3;
+        let mut dec = Decoder::with_config(&data, config);
+
+        assert!(matches!(dec.decode_value().unwrap(), DecodedValue::ArrayStart));
+        dec.decode_value().unwrap(); // 0
+        dec.decode_value().unwrap(); // 1
+        dec.decode_value().unwrap(); // 2
+        // 4th element should fail
+        assert!(matches!(dec.decode_value(), Err(Error::MaxContainerSizeExceeded)));
+    }
+
+    #[test]
+    fn test_max_string_length_exceeded() {
+        // Long string with length > limit
+        // Type 0x68 (STRING_LONG), length=10
+        // Length field: payload = (10 << 1) | 0 = 20, shifted = 20 << 1 = 40 = 0x28
+        let data = [0x68, 0x28, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j'];
+
+        let mut config = DecoderConfig::default();
+        config.max_string_length = 5;
+        let mut dec = Decoder::with_config(&data, config);
+
+        assert!(matches!(dec.decode_value(), Err(Error::MaxStringLengthExceeded)));
+    }
+
+    #[test]
+    fn test_max_document_size_exceeded() {
+        let data = [0x00; 100]; // 100 bytes
+
+        let mut config = DecoderConfig::default();
+        config.max_document_size = 50;
+        let dec = Decoder::with_config(&data, config);
+
+        assert!(matches!(dec.check_document_size(), Err(Error::MaxDocumentSizeExceeded)));
+    }
+
+    #[test]
+    fn test_max_document_size_at_limit() {
+        let data = [0x00; 50]; // exactly 50 bytes
+
+        let mut config = DecoderConfig::default();
+        config.max_document_size = 50;
+        let dec = Decoder::with_config(&data, config);
+
+        dec.check_document_size().unwrap(); // Should succeed
+    }
+
+    // =========================================================================
+    // Direct decode method tests
+    // =========================================================================
+
+    #[test]
+    fn test_decode_i64_direct() {
+        // Small positive
+        let mut dec = Decoder::new(&[0x2a]); // 42
+        assert_eq!(dec.decode_i64_direct().unwrap(), 42);
+
+        // Small negative
+        let mut dec = Decoder::new(&[0xff]); // -1
+        assert_eq!(dec.decode_i64_direct().unwrap(), -1);
+
+        // Larger signed
+        let mut dec = Decoder::new(&[0x79, 0x18, 0xfc]); // -1000 as sint16
+        assert_eq!(dec.decode_i64_direct().unwrap(), -1000);
+    }
+
+    #[test]
+    fn test_decode_u64_direct() {
+        // Small positive
+        let mut dec = Decoder::new(&[0x2a]); // 42
+        assert_eq!(dec.decode_u64_direct().unwrap(), 42);
+
+        // Larger unsigned
+        let mut dec = Decoder::new(&[0x70, 0xc8]); // 200 as uint8
+        assert_eq!(dec.decode_u64_direct().unwrap(), 200);
+    }
+
+    #[test]
+    fn test_decode_bool_direct() {
+        let mut dec = Decoder::new(&[0x6f]); // true
+        assert_eq!(dec.decode_bool_direct().unwrap(), true);
+
+        let mut dec = Decoder::new(&[0x6e]); // false
+        assert_eq!(dec.decode_bool_direct().unwrap(), false);
+    }
+
+    #[test]
+    fn test_decode_str_direct() {
+        // Short string
+        let mut dec = Decoder::new(&[0x85, b'h', b'e', b'l', b'l', b'o']);
+        assert_eq!(dec.decode_str_direct().unwrap(), "hello");
+
+        // Empty string
+        let mut dec = Decoder::new(&[0x80]);
+        assert_eq!(dec.decode_str_direct().unwrap(), "");
+    }
+
+    #[test]
+    fn test_decode_f64_direct() {
+        // Small int as float
+        let mut dec = Decoder::new(&[0x2a]); // 42
+        assert_eq!(dec.decode_f64_direct().unwrap(), 42.0);
+
+        // Float64
+        let mut dec = Decoder::new(&[0x6c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f]); // 1.0
+        assert!((dec.decode_f64_direct().unwrap() - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_peek_type_code() {
+        let dec = Decoder::new(&[0x2a, 0x6f]);
+        assert_eq!(dec.peek_type_code().unwrap(), 0x2a);
+        assert_eq!(dec.peek_type_code().unwrap(), 0x2a); // Doesn't consume
+    }
+
+    #[test]
+    fn test_try_consume_container_end() {
+        let mut dec = Decoder::new(&[0x9b, 0x00]); // container end, then int 0
+        assert_eq!(dec.try_consume_container_end().unwrap(), true);
+        assert_eq!(dec.peek_type_code().unwrap(), 0x00); // Now at int 0
+
+        let mut dec = Decoder::new(&[0x00, 0x9b]); // int 0, then container end
+        assert_eq!(dec.try_consume_container_end().unwrap(), false);
+        assert_eq!(dec.peek_type_code().unwrap(), 0x00); // Still at int 0
+    }
+
+    #[test]
+    fn test_expect_array_start() {
+        let mut dec = Decoder::new(&[0x99]); // array start
+        dec.expect_array_start().unwrap();
+
+        let mut dec = Decoder::new(&[0x9a]); // object start
+        assert!(dec.expect_array_start().is_err());
+    }
+
+    #[test]
+    fn test_expect_object_start() {
+        let mut dec = Decoder::new(&[0x9a]); // object start
+        dec.expect_object_start().unwrap();
+
+        let mut dec = Decoder::new(&[0x99]); // array start
+        assert!(dec.expect_object_start().is_err());
+    }
+
+    #[test]
+    fn test_is_at_container_end() {
+        let dec = Decoder::new(&[0x9b]); // container end
+        assert_eq!(dec.is_at_container_end().unwrap(), true);
+
+        let dec = Decoder::new(&[0x00]); // int 0
+        assert_eq!(dec.is_at_container_end().unwrap(), false);
+    }
+
+    // =========================================================================
+    // Integer boundary tests
+    // =========================================================================
+
+    #[test]
+    fn test_integer_boundaries() {
+        // Boundary between small positive and uint8: 100 vs 101
+        let mut dec = Decoder::new(&[0x64]); // 100 (small int)
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(100));
+
+        let mut dec = Decoder::new(&[0x70, 0x65]); // 101 (uint8)
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::UInt(101));
+
+        // Boundary between small negative and sint8: -100 vs -101
+        let mut dec = Decoder::new(&[0x9c]); // -100 (small int)
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(-100));
+
+        let mut dec = Decoder::new(&[0x78, 0x9b]); // -101 (sint8)
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(-101));
+    }
+
+    #[test]
+    fn test_i64_extremes() {
+        // i64::MAX = 9223372036854775807
+        let mut data = vec![0x7f]; // sint64
+        data.extend_from_slice(&i64::MAX.to_le_bytes());
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(i64::MAX));
+
+        // i64::MIN = -9223372036854775808
+        let mut data = vec![0x7f]; // sint64
+        data.extend_from_slice(&i64::MIN.to_le_bytes());
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(i64::MIN));
+    }
+
+    #[test]
+    fn test_u64_max() {
+        // u64::MAX = 18446744073709551615
+        let mut data = vec![0x77]; // uint64
+        data.extend_from_slice(&u64::MAX.to_le_bytes());
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::UInt(u64::MAX));
+    }
+
+    // =========================================================================
+    // String boundary tests
+    // =========================================================================
+
+    #[test]
+    fn test_string_length_boundaries() {
+        // 15-byte string (max short string)
+        let short_15 = "123456789012345";
+        assert_eq!(short_15.len(), 15);
+        let mut data = vec![0x8f]; // short string length 15
+        data.extend_from_slice(short_15.as_bytes());
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(short_15));
+
+        // 16-byte string (requires long encoding)
+        // Length field: payload = (16 << 1) | 0 = 32, shifted = 32 << 1 = 64 = 0x40
+        let long_16 = "1234567890123456";
+        assert_eq!(long_16.len(), 16);
+        let mut data = vec![0x68, 0x40];
+        data.extend_from_slice(long_16.as_bytes());
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(long_16));
+    }
+
+    // =========================================================================
+    // Error condition tests
+    // =========================================================================
+
+    #[test]
+    fn test_error_truncated_int() {
+        // sint16 but only 1 byte of data
+        let data = [0x79, 0x01];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn test_error_truncated_string() {
+        // Short string length 5 but only 3 bytes
+        let data = [0x85, b'a', b'b', b'c'];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn test_error_truncated_float() {
+        // float64 but only 4 bytes
+        let data = [0x6c, 0x00, 0x00, 0x00, 0x00];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn test_error_invalid_utf8() {
+        // Invalid UTF-8: 0xFF is never valid
+        let data = [0x82, 0xff, 0xfe];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::InvalidUtf8)));
+    }
+
+    #[test]
+    fn test_error_invalid_utf8_continuation() {
+        // Invalid: continuation byte (0x80-0xBF) at start
+        let data = [0x81, 0x80];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::InvalidUtf8)));
+    }
+
+    #[test]
+    fn test_error_invalid_utf8_overlong() {
+        // Overlong encoding of ASCII 'A' (0x41)
+        // Should be [0x41] but encoded as [0xC1, 0x81]
+        let data = [0x82, 0xc1, 0x81];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::InvalidUtf8)));
+    }
+
+    #[test]
+    fn test_error_unclosed_container() {
+        // Array start without end
+        let data = [0x99, 0x01, 0x02];
+        let mut dec = Decoder::new(&data);
+        dec.decode_value().unwrap(); // ArrayStart
+        dec.decode_value().unwrap(); // 1
+        dec.decode_value().unwrap(); // 2
+        assert!(matches!(dec.finish(), Err(Error::UnclosedContainer)));
+    }
+
+    #[test]
+    fn test_error_non_canonical_length() {
+        // 2-byte length field encoding payload 0 (should be 1 byte: 0x00)
+        // Format: [xxxxx01] [yyyyyyyy] where xxxxxyyyyyyyy is the payload
+        // For payload 0: shifted = 0 << 2 | 1 = 1, so bytes = [0x01, 0x00]
+        let data = [0x01, 0x00];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_length_field(), Err(Error::NonCanonicalLength)));
+    }
+
+    #[test]
+    fn test_error_value_out_of_range() {
+        // Try to decode a negative signed integer as u64
+        let data = [0xff]; // -1 as small int
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_u64_direct(), Err(Error::Custom(_))));
+    }
+
+    #[test]
+    fn test_error_expected_type_mismatch() {
+        // Try to decode an integer as a string
+        let data = [0x2a]; // 42
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_str_direct(), Err(Error::Custom(_))));
+    }
+
+    #[test]
+    fn test_error_expected_array_got_object() {
+        // Try to expect array but get object
+        let data = [0x9a]; // object start
+        let mut dec = Decoder::new(&data);
+        assert!(dec.expect_array_start().is_err());
+    }
+
+    #[test]
+    fn test_error_expected_object_got_array() {
+        // Try to expect object but get array
+        let data = [0x99]; // array start
+        let mut dec = Decoder::new(&data);
+        assert!(dec.expect_object_start().is_err());
+    }
+
+    #[test]
+    fn test_error_all_reserved_type_codes() {
+        // Test all reserved type codes
+        let reserved_codes: Vec<u8> = (0x65..=0x67).chain(0x90..=0x98).collect();
+        for code in reserved_codes {
+            let data = [code];
+            let mut dec = Decoder::new(&data);
+            assert!(
+                matches!(dec.decode_value(), Err(Error::InvalidTypeCode(c)) if c == code),
+                "Expected InvalidTypeCode for 0x{:02x}", code
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_empty_input() {
+        let data = [];
+        let mut dec = Decoder::new(&data);
+        assert!(matches!(dec.decode_value(), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn test_error_peek_empty_input() {
+        let data = [];
+        let dec = Decoder::new(&data);
+        assert!(matches!(dec.peek_type_code(), Err(Error::Truncated)));
+    }
+
+    #[test]
+    fn test_error_container_end_mismatch() {
+        // Try to consume container end when there isn't one
+        let data = [0x01]; // int 1
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.try_consume_container_end().unwrap(), false);
+    }
+
+    // =========================================================================
+    // Float edge case tests
+    // =========================================================================
+
+    #[test]
+    fn test_float_negative_zero() {
+        // Encode -0.0
+        let mut buf = Vec::new();
+        let mut enc = Encoder::new(&mut buf);
+        enc.write_f64(-0.0).unwrap();
+
+        // Decode and verify it's negative zero
+        let mut dec = Decoder::new(&buf);
+        if let DecodedValue::Float(v) = dec.decode_value().unwrap() {
+            assert!(v.is_sign_negative());
+            assert_eq!(v, 0.0);
+        } else {
+            panic!("Expected float");
+        }
+    }
+
+    #[test]
+    fn test_float_precision_boundaries() {
+        // Integer floats (0-100) use small int encoding, not float
+        let mut buf = Vec::new();
+        let mut enc = Encoder::new(&mut buf);
+        enc.write_f64(42.0).unwrap();
+        assert_eq!(buf[0], 0x2a); // small int 42
+
+        // Non-integer values that fit in bfloat16 use bfloat16 encoding
+        buf.clear();
+        let mut enc = Encoder::new(&mut buf);
+        enc.write_f64(1.5).unwrap(); // 1.5 can be exactly represented in bfloat16
+        // bfloat16 is type code 0x6a
+        assert_eq!(buf[0], 0x6a);
+
+        // Values NOT representable in bfloat16 use larger encoding
+        buf.clear();
+        let mut enc = Encoder::new(&mut buf);
+        enc.write_f64(1.0000001).unwrap(); // Can't be exactly represented in bfloat16
+        // Should use float32 (0x6b) or float64 (0x6c)
+        assert!(buf[0] == 0x6b || buf[0] == 0x6c);
     }
 }

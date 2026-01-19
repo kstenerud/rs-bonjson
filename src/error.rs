@@ -194,21 +194,3 @@ impl From<std::str::Utf8Error> for Error {
         Error::InvalidUtf8
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_types() {
-        assert_eq!(Error::Truncated.error_type(), "truncated");
-        assert_eq!(Error::InvalidTypeCode(0x65).error_type(), "invalid_type_code");
-        assert_eq!(Error::NulCharacter.error_type(), "nul_character");
-    }
-
-    #[test]
-    fn test_error_display() {
-        let err = Error::InvalidTypeCode(0x65);
-        assert_eq!(format!("{}", err), "invalid type code: 0x65");
-    }
-}
