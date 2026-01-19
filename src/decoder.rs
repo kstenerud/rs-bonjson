@@ -453,7 +453,12 @@ impl<'a> Decoder<'a> {
         let len = type_code::short_string_len(tc);
         let bytes = self.read_bytes(len)?;
 
-        self.validate_string_bytes(bytes)?;
+        // Check for NUL first (cheap check)
+        if !self.config.allow_nul && bytes.contains(&0) {
+            return Err(Error::NulCharacter);
+        }
+
+        // Validate UTF-8 once and get the string
         let s = std::str::from_utf8(bytes)?;
 
         self.toggle_object_state();
@@ -469,15 +474,20 @@ impl<'a> Decoder<'a> {
         }
 
         let bytes = self.read_bytes(length as usize)?;
-        self.validate_string_bytes(bytes)?;
 
         if !continuation {
-            // Single-chunk string - can return borrowed slice
+            // Single-chunk string - validate once and return borrowed slice
+            if !self.config.allow_nul && bytes.contains(&0) {
+                return Err(Error::NulCharacter);
+            }
             let s = std::str::from_utf8(bytes)?;
             self.toggle_object_state();
             self.increment_element_count()?;
             return Ok(DecodedValue::String(s));
         }
+
+        // Multi-chunk: validate first chunk
+        self.validate_string_bytes(bytes)?;
 
         // Multi-chunk string - need to allocate and concatenate
         let mut total_length = length as usize;
