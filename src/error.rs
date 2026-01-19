@@ -90,27 +90,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Create a Truncated error. Marked cold to help branch prediction.
-    #[cold]
-    #[inline(never)]
-    #[must_use] pub fn truncated() -> Self {
-        Error::Truncated
-    }
-
-    /// Create an `InvalidTypeCode` error. Marked cold to help branch prediction.
-    #[cold]
-    #[inline(never)]
-    #[must_use] pub fn invalid_type_code(code: u8) -> Self {
-        Error::InvalidTypeCode(code)
-    }
-
-    /// Create an `InvalidData` error. Marked cold to help branch prediction.
-    #[cold]
-    #[inline(never)]
-    pub fn invalid_data(msg: impl Into<String>) -> Self {
-        Error::InvalidData(msg.into())
-    }
-
     /// Returns the standardized error type name for test matching.
     #[must_use] pub fn error_type(&self) -> &'static str {
         match self {
