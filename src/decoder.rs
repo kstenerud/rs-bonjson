@@ -254,11 +254,27 @@ impl<'a> Decoder<'a> {
     }
 
     // =========================================================================
-    // Unchecked methods for serde deserializer (skips state tracking)
-    // These are safe to use when the caller guarantees correct call order.
+    // Unchecked methods for serde deserializer
+    //
+    // These methods skip container state tracking (depth counting, key/value
+    // alternation) for better performance. They are designed for:
+    //
+    // 1. The serde deserialization path, where Rust's type system guarantees
+    //    correct structure (you can't deserialize an object key as an integer)
+    //
+    // 2. Trusted data sources where the BONJSON is known to be well-formed
+    //
+    // These methods still perform:
+    // - Bounds checking on reads
+    // - UTF-8 validation on strings
+    // - NaN/Infinity rejection (unless configured otherwise)
+    // - Resource limit checks (max string length, etc.)
+    //
+    // For untrusted data where you need full structural validation, use the
+    // public checked methods (decode_value, etc.) instead.
     // =========================================================================
 
-    /// Decode the next value without state tracking.
+    /// Decode the next value without container state tracking.
     /// For use by serde deserializer which guarantees correct structure.
     #[inline]
     pub(crate) fn decode_value_unchecked(&mut self) -> Result<DecodedValue<'a>> {
@@ -430,6 +446,7 @@ impl<'a> Decoder<'a> {
                 }
             }
             type_code::STRING_LONG => {
+                let pos_before_length = self.pos;
                 let (length, continuation) = self.decode_length_field()?;
                 if length > self.config.max_string_length as u64 {
                     return Err(Error::MaxStringLengthExceeded);
@@ -443,8 +460,10 @@ impl<'a> Decoder<'a> {
                         validate_utf8_no_nul(bytes)
                     };
                 }
-                // Multi-chunk: fall back to full decode
-                self.pos -= length as usize + 1;
+                // Multi-chunk string: fall back to full decode.
+                // Back up to the start of the length field so decode_long_string
+                // can re-read from the beginning.
+                self.pos = pos_before_length;
                 match self.decode_long_string()? {
                     DecodedValue::String(s) => Ok(s),
                     _ => unreachable!(),
@@ -637,6 +656,7 @@ impl<'a> Decoder<'a> {
 
     #[inline]
     fn decode_long_string_unchecked(&mut self) -> Result<DecodedValue<'a>> {
+        let pos_before_length = self.pos;
         let (length, continuation) = self.decode_length_field()?;
         if length > self.config.max_string_length as u64 {
             return Err(Error::MaxStringLengthExceeded);
@@ -655,10 +675,11 @@ impl<'a> Decoder<'a> {
             };
             return Ok(DecodedValue::String(s));
         }
-        // Multi-chunk: delegate to the full implementation (rare case)
-        self.pos -= length as usize + 1; // Back up to re-read length field
-        // Rewind to before the length field - we need to find the length field size
-        // This is complex, so just use the checked version for multi-chunk strings
+        // Multi-chunk string: delegate to the full checked implementation.
+        // This is rare in practice - the encoder in this crate never produces chunked
+        // strings, so this only occurs with external BONJSON sources using streaming.
+        // Back up to the start of the length field so decode_long_string can re-read.
+        self.pos = pos_before_length;
         self.decode_long_string()
     }
 

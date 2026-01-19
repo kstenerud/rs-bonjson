@@ -73,11 +73,22 @@ impl<W: Write> Encoder<W> {
     }
 
     // =========================================================================
-    // Unchecked methods for serde serializer (skips state validation)
-    // These are safe to use when the caller guarantees correct call order.
+    // Unchecked methods for serde serializer
+    //
+    // These methods skip container state tracking (ensuring keys alternate with
+    // values in objects, tracking nesting depth) for better performance. They
+    // are designed for the serde serialization path, where Rust's type system
+    // guarantees correct structure.
+    //
+    // These methods still perform:
+    // - NaN/Infinity rejection for floats
+    // - Optimal encoding selection (small ints, bfloat16, etc.)
+    //
+    // For manual encoding where you want structural validation, use the public
+    // checked methods (write_null, write_i64, begin_object, etc.) instead.
     // =========================================================================
 
-    /// Encode a null value without state checks.
+    /// Encode a null value without container state checks.
     #[inline]
     pub(crate) fn write_null_unchecked(&mut self) -> Result<()> {
         self.write_byte(type_code::NULL)
