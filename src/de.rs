@@ -105,80 +105,48 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::Bool(b) => visitor.visit_bool(b),
-            _ => Err(Error::Custom("expected bool".into())),
-        }
+        // Use direct decode to skip DecodedValue intermediate
+        visitor.visit_bool(self.decoder.decode_bool_direct()?)
     }
 
     fn deserialize_i8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
+        visitor.visit_i64(self.decoder.decode_i64_direct()?)
     }
 
     fn deserialize_i16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
+        visitor.visit_i64(self.decoder.decode_i64_direct()?)
     }
 
     fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_i64(visitor)
+        visitor.visit_i64(self.decoder.decode_i64_direct()?)
     }
 
     fn deserialize_i64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::Int(n) => visitor.visit_i64(n),
-            DecodedValue::UInt(n) if n <= i64::MAX as u64 => visitor.visit_i64(n as i64),
-            DecodedValue::Float(f) if f.fract() == 0.0 => visitor.visit_i64(f as i64),
-            DecodedValue::BigNumber(bn) => {
-                if let Some(n) = bn.to_i64() {
-                    visitor.visit_i64(n)
-                } else {
-                    Err(Error::ValueOutOfRange)
-                }
-            }
-            _ => Err(Error::Custom("expected integer".into())),
-        }
+        visitor.visit_i64(self.decoder.decode_i64_direct()?)
     }
 
     fn deserialize_u8<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
+        visitor.visit_u64(self.decoder.decode_u64_direct()?)
     }
 
     fn deserialize_u16<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
+        visitor.visit_u64(self.decoder.decode_u64_direct()?)
     }
 
     fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_u64(visitor)
+        visitor.visit_u64(self.decoder.decode_u64_direct()?)
     }
 
     fn deserialize_u64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::UInt(n) => visitor.visit_u64(n),
-            DecodedValue::Int(n) if n >= 0 => visitor.visit_u64(n as u64),
-            DecodedValue::Float(f) if f.fract() == 0.0 && f >= 0.0 => visitor.visit_u64(f as u64),
-            DecodedValue::BigNumber(bn) => {
-                if let Some(n) = bn.to_u64() {
-                    visitor.visit_u64(n)
-                } else {
-                    Err(Error::ValueOutOfRange)
-                }
-            }
-            _ => Err(Error::Custom("expected unsigned integer".into())),
-        }
+        visitor.visit_u64(self.decoder.decode_u64_direct()?)
     }
 
     fn deserialize_f32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_f64(visitor)
+        visitor.visit_f64(self.decoder.decode_f64_direct()?)
     }
 
     fn deserialize_f64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::Float(f) => visitor.visit_f64(f),
-            DecodedValue::Int(n) => visitor.visit_f64(n as f64),
-            DecodedValue::UInt(n) => visitor.visit_f64(n as f64),
-            DecodedValue::BigNumber(bn) => visitor.visit_f64(bn.to_f64()),
-            _ => Err(Error::Custom("expected float".into())),
-        }
+        visitor.visit_f64(self.decoder.decode_f64_direct()?)
     }
 
     fn deserialize_char<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -195,14 +163,11 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::String(s) => visitor.visit_borrowed_str(s),
-            _ => Err(Error::Custom("expected string".into())),
-        }
+        visitor.visit_borrowed_str(self.decoder.decode_str_direct()?)
     }
 
     fn deserialize_string<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_str(visitor)
+        visitor.visit_borrowed_str(self.decoder.decode_str_direct()?)
     }
 
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -229,12 +194,12 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.peek_value()? {
-            DecodedValue::Null => {
-                self.next_value()?;
-                visitor.visit_none()
-            }
-            _ => visitor.visit_some(self),
+        // Use peek_type_code to check for null without full decode
+        if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
+            self.decoder.skip_byte(); // consume the null
+            visitor.visit_none()
+        } else {
+            visitor.visit_some(self)
         }
     }
 
@@ -262,17 +227,15 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::ArrayStart => {
-                let seq = SeqDeserializer::new(self);
-                visitor.visit_seq(seq)
-            }
-            _ => Err(Error::Custom("expected array".into())),
-        }
+        self.decoder.expect_array_start()?;
+        let seq = SeqDeserializer::new(self);
+        visitor.visit_seq(seq)
     }
 
     fn deserialize_tuple<V: Visitor<'de>>(self, _len: usize, visitor: V) -> Result<V::Value> {
-        self.deserialize_seq(visitor)
+        self.decoder.expect_array_start()?;
+        let seq = SeqDeserializer::new(self);
+        visitor.visit_seq(seq)
     }
 
     fn deserialize_tuple_struct<V: Visitor<'de>>(
@@ -281,17 +244,15 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         _len: usize,
         visitor: V,
     ) -> Result<V::Value> {
-        self.deserialize_seq(visitor)
+        self.decoder.expect_array_start()?;
+        let seq = SeqDeserializer::new(self);
+        visitor.visit_seq(seq)
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        match self.next_value()? {
-            DecodedValue::ObjectStart => {
-                let map = MapDeserializer::new(self);
-                visitor.visit_map(map)
-            }
-            _ => Err(Error::Custom("expected object".into())),
-        }
+        self.decoder.expect_object_start()?;
+        let map = MapDeserializer::new(self);
+        visitor.visit_map(map)
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -300,7 +261,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
-        self.deserialize_map(visitor)
+        self.decoder.expect_object_start()?;
+        let map = MapDeserializer::new(self);
+        visitor.visit_map(map)
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
@@ -309,22 +272,24 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         _variants: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
-        match self.peek_value()? {
-            DecodedValue::String(_) => {
-                // Unit variant: just a string
-                visitor.visit_enum(UnitVariantDeserializer::new(self))
-            }
-            DecodedValue::ObjectStart => {
-                // Other variants: object with single key
-                self.next_value()?;
-                visitor.visit_enum(EnumDeserializer::new(self))
-            }
-            _ => Err(Error::Custom("expected string or object for enum".into())),
+        use crate::types::type_code;
+        let tc = self.decoder.peek_type_code()?;
+        // Check if it's a string (short: 0x80-0x8f, long: 0x68)
+        if type_code::is_short_string(tc) || tc == type_code::STRING_LONG {
+            // Unit variant: just a string
+            visitor.visit_enum(UnitVariantDeserializer::new(self))
+        } else if tc == type_code::OBJECT_START {
+            // Other variants: object with single key
+            self.decoder.skip_byte(); // consume the object start
+            visitor.visit_enum(EnumDeserializer::new(self))
+        } else {
+            Err(Error::Custom("expected string or object for enum".into()))
         }
     }
 
     fn deserialize_identifier<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        self.deserialize_str(visitor)
+        // Field names are always strings - use direct decode
+        visitor.visit_borrowed_str(self.decoder.decode_str_direct()?)
     }
 
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
@@ -349,13 +314,12 @@ impl<'a, 'de> SeqAccess<'de> for SeqDeserializer<'a, 'de> {
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>> {
-        match self.de.peek_value()? {
-            DecodedValue::ContainerEnd => {
-                self.de.next_value()?;
-                Ok(None)
-            }
-            _ => seed.deserialize(&mut *self.de).map(Some),
+        // Use direct container end check - avoids peek/decode/match overhead
+        if self.de.decoder.is_at_container_end()? {
+            self.de.decoder.skip_container_end()?;
+            return Ok(None);
         }
+        seed.deserialize(&mut *self.de).map(Some)
     }
 }
 
@@ -373,13 +337,12 @@ impl<'a, 'de> MapAccess<'de> for MapDeserializer<'a, 'de> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
-        match self.de.peek_value()? {
-            DecodedValue::ContainerEnd => {
-                self.de.next_value()?;
-                Ok(None)
-            }
-            _ => seed.deserialize(&mut *self.de).map(Some),
+        // Use direct container end check - avoids peek/decode/match overhead
+        if self.de.decoder.is_at_container_end()? {
+            self.de.decoder.skip_container_end()?;
+            return Ok(None);
         }
+        seed.deserialize(&mut *self.de).map(Some)
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {

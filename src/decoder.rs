@@ -189,6 +189,12 @@ impl<'a> Decoder<'a> {
         Ok(())
     }
 
+    /// Skip a single byte (for internal use after peeking).
+    #[inline]
+    pub(crate) fn skip_byte(&mut self) {
+        self.pos += 1;
+    }
+
     /// Read a single byte, advancing position.
     #[inline]
     fn read_byte(&mut self) -> Result<u8> {
@@ -222,6 +228,223 @@ impl<'a> Decoder<'a> {
     pub(crate) fn decode_value_unchecked(&mut self) -> Result<DecodedValue<'a>> {
         let tc = self.read_byte()?;
         self.decode_value_unchecked_with_type(tc)
+    }
+
+    /// Peek at the next type code without consuming it.
+    #[inline]
+    pub(crate) fn peek_type_code(&self) -> Result<u8> {
+        if self.pos >= self.data.len() {
+            return Err(Error::Truncated);
+        }
+        Ok(self.data[self.pos])
+    }
+
+    /// Check if next value is container end (without consuming).
+    #[inline]
+    pub(crate) fn is_at_container_end(&self) -> Result<bool> {
+        Ok(self.peek_type_code()? == type_code::CONTAINER_END)
+    }
+
+    /// Skip the container end marker.
+    #[inline]
+    pub(crate) fn skip_container_end(&mut self) -> Result<()> {
+        let tc = self.read_byte()?;
+        if tc != type_code::CONTAINER_END {
+            return Err(Error::Custom("expected container end".into()));
+        }
+        Ok(())
+    }
+
+    /// Expect and skip an array start marker.
+    #[inline]
+    pub(crate) fn expect_array_start(&mut self) -> Result<()> {
+        let tc = self.read_byte()?;
+        if tc != type_code::ARRAY_START {
+            return Err(Error::Custom("expected array".into()));
+        }
+        Ok(())
+    }
+
+    /// Expect and skip an object start marker.
+    #[inline]
+    pub(crate) fn expect_object_start(&mut self) -> Result<()> {
+        let tc = self.read_byte()?;
+        if tc != type_code::OBJECT_START {
+            return Err(Error::Custom("expected object".into()));
+        }
+        Ok(())
+    }
+
+    /// Decode an i64 directly, without going through DecodedValue.
+    #[inline]
+    pub(crate) fn decode_i64_direct(&mut self) -> Result<i64> {
+        let tc = self.read_byte()?;
+        match tc {
+            // Small integers: 0-100
+            0x00..=0x64 => Ok(tc as i64),
+            // Small negative integers: -100 to -1
+            0x9c..=0xff => Ok(tc as i8 as i64),
+            // Signed integers
+            0x78..=0x7f => {
+                let size = type_code::signed_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let sign_bit = (bytes[size - 1] >> 7) & 1;
+                let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+                let mut buf = [fill; 8];
+                buf[..size].copy_from_slice(bytes);
+                Ok(i64::from_le_bytes(buf))
+            }
+            // Unsigned integers (if they fit in i64)
+            0x70..=0x77 => {
+                let size = type_code::unsigned_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let mut buf = [0u8; 8];
+                buf[..size].copy_from_slice(bytes);
+                let value = u64::from_le_bytes(buf);
+                if value <= i64::MAX as u64 {
+                    Ok(value as i64)
+                } else {
+                    Err(Error::ValueOutOfRange)
+                }
+            }
+            _ => Err(Error::Custom("expected integer".into())),
+        }
+    }
+
+    /// Decode a u64 directly, without going through DecodedValue.
+    #[inline]
+    pub(crate) fn decode_u64_direct(&mut self) -> Result<u64> {
+        let tc = self.read_byte()?;
+        match tc {
+            // Small integers: 0-100
+            0x00..=0x64 => Ok(tc as u64),
+            // Unsigned integers
+            0x70..=0x77 => {
+                let size = type_code::unsigned_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let mut buf = [0u8; 8];
+                buf[..size].copy_from_slice(bytes);
+                Ok(u64::from_le_bytes(buf))
+            }
+            // Signed integers (if non-negative)
+            0x78..=0x7f => {
+                let size = type_code::signed_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let sign_bit = (bytes[size - 1] >> 7) & 1;
+                if sign_bit == 1 {
+                    return Err(Error::ValueOutOfRange);
+                }
+                let mut buf = [0u8; 8];
+                buf[..size].copy_from_slice(bytes);
+                Ok(u64::from_le_bytes(buf))
+            }
+            _ => Err(Error::Custom("expected unsigned integer".into())),
+        }
+    }
+
+    /// Decode a bool directly, without going through DecodedValue.
+    #[inline]
+    pub(crate) fn decode_bool_direct(&mut self) -> Result<bool> {
+        let tc = self.read_byte()?;
+        match tc {
+            type_code::TRUE => Ok(true),
+            type_code::FALSE => Ok(false),
+            _ => Err(Error::Custom("expected bool".into())),
+        }
+    }
+
+    /// Decode a string directly, without going through DecodedValue.
+    #[inline]
+    pub(crate) fn decode_str_direct(&mut self) -> Result<&'a str> {
+        let tc = self.read_byte()?;
+        match tc {
+            0x80..=0x8f => {
+                let len = type_code::short_string_len(tc);
+                let bytes = self.read_bytes(len)?;
+                if self.config.allow_nul {
+                    Ok(std::str::from_utf8(bytes)?)
+                } else {
+                    validate_utf8_no_nul(bytes)
+                }
+            }
+            type_code::STRING_LONG => {
+                let (length, continuation) = self.decode_length_field()?;
+                if length > self.config.max_string_length as u64 {
+                    return Err(Error::MaxStringLengthExceeded);
+                }
+                let bytes = self.read_bytes(length as usize)?;
+                if !continuation {
+                    return if self.config.allow_nul {
+                        Ok(std::str::from_utf8(bytes)?)
+                    } else {
+                        validate_utf8_no_nul(bytes)
+                    };
+                }
+                // Multi-chunk: fall back to full decode
+                self.pos -= length as usize + 1;
+                match self.decode_long_string()? {
+                    DecodedValue::String(s) => Ok(s),
+                    _ => unreachable!(),
+                }
+            }
+            _ => Err(Error::Custom("expected string".into())),
+        }
+    }
+
+    /// Decode an f64 directly, without going through DecodedValue.
+    #[inline]
+    pub(crate) fn decode_f64_direct(&mut self) -> Result<f64> {
+        let tc = self.read_byte()?;
+        match tc {
+            // Small integers: 0-100
+            0x00..=0x64 => Ok(tc as f64),
+            // Small negative integers: -100 to -1
+            0x9c..=0xff => Ok((tc as i8) as f64),
+            // Signed integers
+            0x78..=0x7f => {
+                let size = type_code::signed_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let sign_bit = (bytes[size - 1] >> 7) & 1;
+                let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+                let mut buf = [fill; 8];
+                buf[..size].copy_from_slice(bytes);
+                Ok(i64::from_le_bytes(buf) as f64)
+            }
+            // Unsigned integers
+            0x70..=0x77 => {
+                let size = type_code::unsigned_int_size(tc);
+                let bytes = self.read_bytes(size)?;
+                let mut buf = [0u8; 8];
+                buf[..size].copy_from_slice(bytes);
+                Ok(u64::from_le_bytes(buf) as f64)
+            }
+            // Float16
+            type_code::FLOAT16 => {
+                let bytes = self.read_bytes(2)?;
+                let bits = u16::from_le_bytes([bytes[0], bytes[1]]);
+                let f32_bits = (bits as u32) << 16;
+                let value = f32::from_bits(f32_bits) as f64;
+                self.check_float(value)?;
+                Ok(value)
+            }
+            // Float32
+            type_code::FLOAT32 => {
+                let bytes = self.read_bytes(4)?;
+                let value = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64;
+                self.check_float(value)?;
+                Ok(value)
+            }
+            // Float64
+            type_code::FLOAT64 => {
+                let bytes = self.read_bytes(8)?;
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(bytes);
+                let value = f64::from_le_bytes(buf);
+                self.check_float(value)?;
+                Ok(value)
+            }
+            _ => Err(Error::Custom("expected number".into())),
+        }
     }
 
     /// Decode a value given its type code, without state tracking.
