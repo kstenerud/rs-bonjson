@@ -32,3 +32,4 @@ coverage/
 
 # Benchmark artifacts
 criterion/
+profile.json.gz

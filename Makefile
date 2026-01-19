@@ -1,4 +1,4 @@
-.PHONY: bench quickbench test build clean check fmt clippy all
+.PHONY: bench quickbench test build clean check fmt clippy all profile profile-bench
 
 # Run criterion benchmarks (rigorous, with statistical analysis)
 bench:
@@ -34,3 +34,14 @@ clean:
 
 # Run all checks (useful before committing)
 all: fmt clippy test
+
+# Profile quick benchmark and open in profiler UI
+# Requires: cargo install samply
+profile:
+	cargo build --release --example quick_bench
+	samply record ./target/release/examples/quick_bench
+
+# Profile criterion benchmarks
+profile-bench:
+	cargo build --release --bench comparison
+	samply record ./target/release/deps/comparison-* --bench
