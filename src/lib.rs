@@ -113,6 +113,24 @@
 //! - Maximum container size: 1,000,000 elements
 //! - Maximum string length: 10 MB
 //! - Maximum chunks per string: 100
+//!
+//! ## Optional Features
+//!
+//! ### `simd-utf8`
+//!
+//! Enables SIMD-accelerated UTF-8 validation using the [`simdutf8`](https://docs.rs/simdutf8) crate.
+//! This can improve decoding performance for workloads with large strings or Unicode-heavy content:
+//!
+//! - **Large strings (400+ bytes)**: ~5-10% faster
+//! - **Unicode-heavy content**: ~30% faster
+//! - **Small ASCII strings**: No significant change
+//!
+//! Enable in your `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! serde_bonjson = { version = "0.1", features = ["simd-utf8"] }
+//! ```
 
 pub mod de;
 pub mod decoder;

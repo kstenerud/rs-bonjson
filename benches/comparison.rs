@@ -224,12 +224,137 @@ fn bench_nested_data(c: &mut Criterion) {
     group.finish();
 }
 
+/// Create data with many small strings (typical JSON field names/short values)
+fn create_many_small_strings() -> Vec<String> {
+    (0..1000)
+        .map(|i| format!("field_{}", i))
+        .collect()
+}
+
+/// Create data with large strings (paragraphs)
+fn create_large_strings() -> Vec<String> {
+    let paragraph = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. \
+        Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. \
+        Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris \
+        nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in \
+        reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla \
+        pariatur. Excepteur sint occaecat cupidatat non proident, sunt in \
+        culpa qui officia deserunt mollit anim id est laborum.";
+    (0..100).map(|_| paragraph.to_string()).collect()
+}
+
+/// Create data with Unicode strings (non-ASCII)
+fn create_unicode_strings() -> Vec<String> {
+    vec![
+        "日本語テキスト".to_string(),
+        "Привет мир".to_string(),
+        "مرحبا بالعالم".to_string(),
+        "שלום עולם".to_string(),
+        "🎉🎊🎁🎈🎂".to_string(),
+        "Ελληνικά".to_string(),
+        "中文文本示例".to_string(),
+        "한국어 텍스트".to_string(),
+        "ภาษาไทย".to_string(),
+        "हिन्दी पाठ".to_string(),
+    ].into_iter()
+        .cycle()
+        .take(500)
+        .collect()
+}
+
+fn bench_many_small_strings(c: &mut Criterion) {
+    let data = create_many_small_strings();
+
+    let mut group = c.benchmark_group("many_small_strings_1000");
+
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
+    let json_bytes = serde_json::to_vec(&data).unwrap();
+
+    group.throughput(Throughput::Elements(data.len() as u64));
+
+    group.bench_function("bonjson_decode", |b| {
+        b.iter(|| {
+            black_box(serde_bonjson::from_slice::<Vec<String>>(black_box(&bonjson_bytes)).unwrap())
+        })
+    });
+
+    group.bench_function("json_decode", |b| {
+        b.iter(|| {
+            black_box(serde_json::from_slice::<Vec<String>>(black_box(&json_bytes)).unwrap())
+        })
+    });
+
+    println!("Many small strings: BONJSON={} bytes, JSON={} bytes",
+             bonjson_bytes.len(), json_bytes.len());
+
+    group.finish();
+}
+
+fn bench_large_strings(c: &mut Criterion) {
+    let data = create_large_strings();
+
+    let mut group = c.benchmark_group("large_strings_100");
+
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
+    let json_bytes = serde_json::to_vec(&data).unwrap();
+
+    group.throughput(Throughput::Bytes(bonjson_bytes.len() as u64));
+
+    group.bench_function("bonjson_decode", |b| {
+        b.iter(|| {
+            black_box(serde_bonjson::from_slice::<Vec<String>>(black_box(&bonjson_bytes)).unwrap())
+        })
+    });
+
+    group.bench_function("json_decode", |b| {
+        b.iter(|| {
+            black_box(serde_json::from_slice::<Vec<String>>(black_box(&json_bytes)).unwrap())
+        })
+    });
+
+    println!("Large strings: BONJSON={} bytes, JSON={} bytes",
+             bonjson_bytes.len(), json_bytes.len());
+
+    group.finish();
+}
+
+fn bench_unicode_strings(c: &mut Criterion) {
+    let data = create_unicode_strings();
+
+    let mut group = c.benchmark_group("unicode_strings_500");
+
+    let bonjson_bytes = serde_bonjson::to_vec(&data).unwrap();
+    let json_bytes = serde_json::to_vec(&data).unwrap();
+
+    group.throughput(Throughput::Elements(data.len() as u64));
+
+    group.bench_function("bonjson_decode", |b| {
+        b.iter(|| {
+            black_box(serde_bonjson::from_slice::<Vec<String>>(black_box(&bonjson_bytes)).unwrap())
+        })
+    });
+
+    group.bench_function("json_decode", |b| {
+        b.iter(|| {
+            black_box(serde_json::from_slice::<Vec<String>>(black_box(&json_bytes)).unwrap())
+        })
+    });
+
+    println!("Unicode strings: BONJSON={} bytes, JSON={} bytes",
+             bonjson_bytes.len(), json_bytes.len());
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_simple_struct,
     bench_complex_struct,
     bench_integer_array,
     bench_nested_data,
+    bench_many_small_strings,
+    bench_large_strings,
+    bench_unicode_strings,
 );
 
 criterion_main!(benches);

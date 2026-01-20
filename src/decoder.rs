@@ -5,6 +5,20 @@
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
 
+/// Validate and convert bytes to a UTF-8 string.
+/// Uses simdutf8 for SIMD-accelerated validation when the feature is enabled.
+#[cfg(feature = "simd-utf8")]
+#[inline]
+fn validate_utf8(bytes: &[u8]) -> Result<&str> {
+    simdutf8::basic::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
+}
+
+#[cfg(not(feature = "simd-utf8"))]
+#[inline]
+fn validate_utf8(bytes: &[u8]) -> Result<&str> {
+    std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
+}
+
 /// How to handle duplicate keys in objects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DuplicateKeyMode {
@@ -662,7 +676,7 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(len)?;
 
         // Validate UTF-8
-        let s = std::str::from_utf8(bytes)?;
+        let s = validate_utf8(bytes)?;
 
         // Check for NUL characters
         if !self.config.allow_nul && bytes.contains(&0) {
@@ -685,7 +699,7 @@ impl<'a> Decoder<'a> {
 
         // Single-chunk case (most common): validate and return directly
         if !first_continuation {
-            let s = std::str::from_utf8(first_bytes)?;
+            let s = validate_utf8(first_bytes)?;
             if !self.config.allow_nul && first_bytes.contains(&0) {
                 return Err(Error::NulCharacter);
             }
@@ -722,7 +736,7 @@ impl<'a> Decoder<'a> {
         }
 
         // Validate UTF-8 on the complete assembled string
-        let s = std::str::from_utf8(&self.scratch)?;
+        let s = validate_utf8(&self.scratch)?;
 
         // Check for NUL characters
         if !self.config.allow_nul && self.scratch.contains(&0) {

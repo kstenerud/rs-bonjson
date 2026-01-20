@@ -57,6 +57,7 @@ The project uses a layered architecture:
 - `DuplicateKeyMode` - Error, KeepFirst, or KeepLast
 - Uses compiler intrinsics (`trailing_zeros()`) for efficient length field decoding
 - Validates UTF-8 on complete assembled strings (multi-chunk strings are concatenated first)
+- Optional SIMD-accelerated UTF-8 validation via `simd-utf8` feature
 - Returns `DecodedValue<'a>` enum for streaming access
 
 ### value.rs
@@ -96,7 +97,6 @@ The project uses a layered architecture:
 - Zero-copy string decoding for single-chunk strings
 - Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum - avoids intermediate allocation and match overhead
 - `try_consume_container_end()` checks if current chunk is exhausted with no continuation, pops container state if so
-- Short ASCII strings (≤32 bytes) skip UTF-8 validation since ASCII is always valid UTF-8
 - Length field decoding uses `trailing_zeros()` intrinsic
 - Serde path uses unchecked methods that skip container state tracking
 - Inline hints on hot paths
@@ -119,6 +119,19 @@ The project uses a layered architecture:
 - For file/network I/O, wrap writers in `BufWriter` - the encoder writes small chunks
   (often single bytes) directly to the writer
 - `to_vec` pre-allocates 128 bytes; for large payloads, use `to_writer` with a pre-sized Vec
+
+## Optional Features
+
+### `simd-utf8`
+Enables SIMD-accelerated UTF-8 validation using the `simdutf8` crate. Benchmarks show:
+- Large strings (400+ bytes): ~5-10% faster decoding
+- Unicode-heavy content: ~30% faster decoding
+- Small ASCII strings: No significant change
+
+Enable with: `cargo build --features simd-utf8`
+
+The implementation uses `simdutf8::basic::from_utf8()` which leverages SSE2/AVX2 (x86) or
+NEON (ARM) instructions when available.
 
 ## Testing
 
