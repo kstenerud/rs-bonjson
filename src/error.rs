@@ -45,10 +45,6 @@ pub enum Error {
     /// Test spec: "`value_out_of_range`"
     ValueOutOfRange,
 
-    /// Non-canonical (oversized) length encoding.
-    /// Test spec: "`non_canonical_length`"
-    NonCanonicalLength,
-
     /// String exceeds chunk count limit.
     /// Test spec: "`too_many_chunks`"
     TooManyChunks,
@@ -102,7 +98,6 @@ impl Error {
             Error::UnclosedContainer => "unclosed_container",
             Error::InvalidData(_) => "invalid_data",
             Error::ValueOutOfRange => "value_out_of_range",
-            Error::NonCanonicalLength => "non_canonical_length",
             Error::TooManyChunks => "too_many_chunks",
             Error::EmptyChunkContinuation => "empty_chunk_continuation",
             Error::MaxDepthExceeded => "max_depth_exceeded",
@@ -130,7 +125,6 @@ impl fmt::Display for Error {
             Error::UnclosedContainer => write!(f, "unclosed container"),
             Error::InvalidData(msg) => write!(f, "invalid data: {msg}"),
             Error::ValueOutOfRange => write!(f, "value out of range"),
-            Error::NonCanonicalLength => write!(f, "non-canonical length encoding"),
             Error::TooManyChunks => write!(f, "too many string chunks"),
             Error::EmptyChunkContinuation => {
                 write!(f, "empty chunk with continuation bit")

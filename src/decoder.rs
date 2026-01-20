@@ -827,14 +827,6 @@ impl<'a> Decoder<'a> {
         let raw = u64::from_le_bytes(buf);
         let payload = raw >> count;
 
-        // Check for non-canonical encoding
-        if count > 1 {
-            let min_payload_for_count = 1u64 << (7 * (count - 1));
-            if payload < min_payload_for_count {
-                return Err(Error::NonCanonicalLength);
-            }
-        }
-
         let length = payload >> 1;
         let continuation = (payload & 1) != 0;
 
@@ -1087,10 +1079,22 @@ mod tests {
     }
 
     #[test]
-    fn test_non_canonical_length_rejected() {
-        // 2-byte length field encoding payload 0 (should be 1 byte: 0x00)
+    fn test_non_canonical_length_accepted() {
+        // 2-byte length field encoding payload 0 (canonically 1 byte: 0x00)
+        // Per updated spec, decoders MUST accept non-canonical lengths
         let data = [0x01, 0x00];
         let mut dec = Decoder::new(&data);
-        assert!(matches!(dec.decode_length_field(), Err(Error::NonCanonicalLength)));
+        assert_eq!(dec.decode_length_field().unwrap(), (0, false));
+
+        // 2-byte length field encoding payload 2 (length=1, cont=0)
+        // Canonically would be 0x04
+        let data = [0x09, 0x00];
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_length_field().unwrap(), (1, false));
+
+        // 3-byte length field encoding payload 0
+        let data = [0x03, 0x00, 0x00];
+        let mut dec = Decoder::new(&data);
+        assert_eq!(dec.decode_length_field().unwrap(), (0, false));
     }
 }
