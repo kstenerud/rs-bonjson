@@ -8,7 +8,7 @@ This is `serde_bonjson`, a Rust implementation of BONJSON (Binary Object Notatio
 - `json!` → `bonjson!`
 - `serde_json::Value` → `serde_bonjson::Value`
 
-BONJSON is a binary format that is 1:1 compatible with JSON but more efficient to process. The codec follows the BONJSON specification at `../bonjson/bonjson.md`.
+BONJSON is a binary format that is 1:1 compatible with JSON but more efficient to process. The codec follows the BONJSON specification at `specification/bonjson.md`.
 
 ## Architecture
 
@@ -126,7 +126,7 @@ The project uses a layered architecture:
 Each module has embedded `#[cfg(test)]` tests covering basic functionality.
 
 ### Conformance Tests
-`tests/conformance.rs` runs the universal BONJSON test suite from `../bonjson/tests/conformance/`.
+`tests/conformance.rs` runs the universal BONJSON test suite from `specification/tests/conformance/`.
 
 Run all tests:
 ```bash
@@ -149,7 +149,7 @@ cargo clippy        # Run linter
 
 ## Adding New Features
 
-1. Check if the feature exists in the spec (`../bonjson/bonjson.md`)
+1. Check if the feature exists in the spec (`specification/bonjson.md`)
 2. Add any new error variants to `error.rs`
 3. Update encoder/decoder as needed
 4. Add tests to the relevant module

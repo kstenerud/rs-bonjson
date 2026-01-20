@@ -581,7 +581,7 @@ fn run_test_file(path: &Path) -> (usize, usize, Vec<String>) {
 
 #[test]
 fn test_conformance_basic_types() {
-    let path = Path::new("../bonjson/tests/conformance/basic-types.json");
+    let path = Path::new("specification/tests/conformance/basic-types.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -597,7 +597,7 @@ fn test_conformance_basic_types() {
 
 #[test]
 fn test_conformance_integers() {
-    let path = Path::new("../bonjson/tests/conformance/integers.json");
+    let path = Path::new("specification/tests/conformance/integers.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -613,7 +613,7 @@ fn test_conformance_integers() {
 
 #[test]
 fn test_conformance_floats() {
-    let path = Path::new("../bonjson/tests/conformance/floats.json");
+    let path = Path::new("specification/tests/conformance/floats.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -629,7 +629,7 @@ fn test_conformance_floats() {
 
 #[test]
 fn test_conformance_strings() {
-    let path = Path::new("../bonjson/tests/conformance/strings.json");
+    let path = Path::new("specification/tests/conformance/strings.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -645,7 +645,7 @@ fn test_conformance_strings() {
 
 #[test]
 fn test_conformance_containers() {
-    let path = Path::new("../bonjson/tests/conformance/containers.json");
+    let path = Path::new("specification/tests/conformance/containers.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -661,7 +661,7 @@ fn test_conformance_containers() {
 
 #[test]
 fn test_conformance_bignumber() {
-    let path = Path::new("../bonjson/tests/conformance/bignumber.json");
+    let path = Path::new("specification/tests/conformance/bignumber.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -677,7 +677,7 @@ fn test_conformance_bignumber() {
 
 #[test]
 fn test_conformance_errors() {
-    let path = Path::new("../bonjson/tests/conformance/errors.json");
+    let path = Path::new("specification/tests/conformance/errors.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -693,7 +693,7 @@ fn test_conformance_errors() {
 
 #[test]
 fn test_conformance_security() {
-    let path = Path::new("../bonjson/tests/conformance/security.json");
+    let path = Path::new("specification/tests/conformance/security.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
@@ -709,7 +709,7 @@ fn test_conformance_security() {
 
 #[test]
 fn test_conformance_specification_examples() {
-    let path = Path::new("../bonjson/tests/conformance/specification-examples.json");
+    let path = Path::new("specification/tests/conformance/specification-examples.json");
     if !path.exists() {
         eprintln!("Skipping: test file not found at {:?}", path);
         return;
