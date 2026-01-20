@@ -130,6 +130,30 @@ pub mod type_code {
         ((code & 0x07) + 1) as usize
     }
 
+    /// Check if a type code is any integer (signed or unsigned): 0xd0-0xdf
+    /// This is more efficient than checking signed and unsigned separately.
+    #[inline]
+    #[must_use]
+    pub const fn is_any_int(code: u8) -> bool {
+        (code & 0xf0) == 0xd0
+    }
+
+    /// Check if an integer type code is signed (bit 3 set).
+    /// Only valid when is_any_int() returns true.
+    #[inline]
+    #[must_use]
+    pub const fn int_is_signed(code: u8) -> bool {
+        (code & 0x08) != 0
+    }
+
+    /// Get the byte count for any integer type code (works for both signed and unsigned).
+    /// Only valid when is_any_int() returns true.
+    #[inline]
+    #[must_use]
+    pub const fn int_size(code: u8) -> usize {
+        ((code & 0x07) + 1) as usize
+    }
+
     /// Check if a type code is reserved
     #[inline]
     #[must_use]

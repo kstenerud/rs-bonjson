@@ -26,6 +26,41 @@ fn test_deserialize_option() {
     assert_eq!(from_slice::<Option<i32>>(&[0x8e]).unwrap(), Some(42));
 }
 
+/// Test null values inside containers (regression test for container state tracking).
+/// When deserializing Option::None inside a container, the container's element count
+/// must be decremented properly.
+#[test]
+fn test_null_in_containers() {
+    // Array of None values: [None, None]
+    let nulls: Vec<Option<i32>> = vec![None, None];
+    let bytes = crate::to_vec(&nulls).unwrap();
+    assert_eq!(from_slice::<Vec<Option<i32>>>(&bytes).unwrap(), nulls);
+
+    // Array with mixed Some/None
+    let mixed: Vec<Option<i32>> = vec![Some(1), None, Some(2), None];
+    let bytes = crate::to_vec(&mixed).unwrap();
+    assert_eq!(from_slice::<Vec<Option<i32>>>(&bytes).unwrap(), mixed);
+
+    // Struct with Option fields containing None
+    #[derive(Debug, serde::Serialize, Deserialize, PartialEq)]
+    struct Data {
+        a: String,
+        b: Option<i32>,
+    }
+
+    let data = vec![
+        Data { a: "x".to_string(), b: None },
+        Data { a: "y".to_string(), b: None },
+    ];
+    let bytes = crate::to_vec(&data).unwrap();
+    assert_eq!(from_slice::<Vec<Data>>(&bytes).unwrap(), data);
+
+    // Nested containers with nulls
+    let nested: Vec<Vec<Option<i32>>> = vec![vec![None, None], vec![None]];
+    let bytes = crate::to_vec(&nested).unwrap();
+    assert_eq!(from_slice::<Vec<Vec<Option<i32>>>>(&bytes).unwrap(), nested);
+}
+
 #[test]
 fn test_deserialize_vec() {
     // [1, 2, 3]: array 0xf8 + chunk(count=3) 0x0c + elements 0x65 0x66 0x67

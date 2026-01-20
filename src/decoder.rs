@@ -270,16 +270,14 @@ impl<'a> Decoder<'a> {
             return Ok(i64::from(type_code::small_int_value(tc)));
         }
 
-        // Unsigned integers: 0xd0-0xd7
-        if type_code::is_unsigned_int(tc) {
-            let val = self.read_unsigned_int(tc)?;
-            self.consume_element();
-            return Ok(val as i64);
-        }
-
-        // Signed integers: 0xd8-0xdf
-        if type_code::is_signed_int(tc) {
-            let val = self.read_signed_int(tc)?;
+        // All integers (signed and unsigned): 0xd0-0xdf
+        if type_code::is_any_int(tc) {
+            let size = type_code::int_size(tc);
+            let val = if type_code::int_is_signed(tc) {
+                self.read_signed_int_sized(size)?
+            } else {
+                self.read_unsigned_int_sized(size)? as i64
+            };
             self.consume_element();
             return Ok(val);
         }
@@ -302,21 +300,22 @@ impl<'a> Decoder<'a> {
             return Ok(val as u64);
         }
 
-        // Unsigned integers: 0xd0-0xd7
-        if type_code::is_unsigned_int(tc) {
-            let val = self.read_unsigned_int(tc)?;
-            self.consume_element();
+        // All integers (signed and unsigned): 0xd0-0xdf
+        if type_code::is_any_int(tc) {
+            let size = type_code::int_size(tc);
+            let val = if type_code::int_is_signed(tc) {
+                let signed_val = self.read_signed_int_sized(size)?;
+                self.consume_element();
+                if signed_val < 0 {
+                    return Err(Error::ValueOutOfRange);
+                }
+                signed_val as u64
+            } else {
+                let unsigned_val = self.read_unsigned_int_sized(size)?;
+                self.consume_element();
+                unsigned_val
+            };
             return Ok(val);
-        }
-
-        // Signed integers: 0xd8-0xdf (if non-negative)
-        if type_code::is_signed_int(tc) {
-            let val = self.read_signed_int(tc)?;
-            self.consume_element();
-            if val < 0 {
-                return Err(Error::ValueOutOfRange);
-            }
-            return Ok(val as u64);
         }
 
         Err(Error::Custom(format!("expected unsigned integer, got 0x{tc:02x}")))
@@ -374,18 +373,16 @@ impl<'a> Decoder<'a> {
             return Ok(f64::from(type_code::small_int_value(tc)));
         }
 
-        // Unsigned integers
-        if type_code::is_unsigned_int(tc) {
-            let val = self.read_unsigned_int(tc)?;
+        // All integers (signed and unsigned): 0xd0-0xdf
+        if type_code::is_any_int(tc) {
+            let size = type_code::int_size(tc);
+            let val = if type_code::int_is_signed(tc) {
+                self.read_signed_int_sized(size)? as f64
+            } else {
+                self.read_unsigned_int_sized(size)? as f64
+            };
             self.consume_element();
-            return Ok(val as f64);
-        }
-
-        // Signed integers
-        if type_code::is_signed_int(tc) {
-            let val = self.read_signed_int(tc)?;
-            self.consume_element();
-            return Ok(val as f64);
+            return Ok(val);
         }
 
         let result = match tc {
@@ -452,8 +449,9 @@ impl<'a> Decoder<'a> {
         Ok(count == 0 && !continuation)
     }
 
-    /// Consume one element from current container.
-    fn consume_element(&mut self) {
+    /// Consume one element from current container (decrement remaining count).
+    /// Must be called after fully processing a value that was read from a container.
+    pub(crate) fn consume_element(&mut self) {
         if let Some(container) = self.containers.last_mut() {
             if container.remaining > 0 {
                 container.remaining -= 1;
@@ -524,23 +522,19 @@ impl<'a> Decoder<'a> {
             return Ok(DecodedValue::Int(i64::from(type_code::small_int_value(tc))));
         }
 
-        // Reserved: 0xc9-0xcf
-        if type_code::is_reserved(tc) {
-            return Err(Error::InvalidTypeCode(tc));
-        }
-
-        // Unsigned integers: 0xd0-0xd7
-        if type_code::is_unsigned_int(tc) {
-            let val = self.read_unsigned_int(tc)?;
-            self.consume_element();
-            return Ok(DecodedValue::UInt(val));
-        }
-
-        // Signed integers: 0xd8-0xdf
-        if type_code::is_signed_int(tc) {
-            let val = self.read_signed_int(tc)?;
-            self.consume_element();
-            return Ok(DecodedValue::Int(val));
+        // All integers (signed and unsigned): 0xd0-0xdf
+        // Combined check is more efficient than separate unsigned/signed checks
+        if type_code::is_any_int(tc) {
+            let size = type_code::int_size(tc);
+            return if type_code::int_is_signed(tc) {
+                let val = self.read_signed_int_sized(size)?;
+                self.consume_element();
+                Ok(DecodedValue::Int(val))
+            } else {
+                let val = self.read_unsigned_int_sized(size)?;
+                self.consume_element();
+                Ok(DecodedValue::UInt(val))
+            };
         }
 
         // Short strings: 0xe0-0xef
@@ -551,6 +545,7 @@ impl<'a> Decoder<'a> {
             return Ok(DecodedValue::String(s));
         }
 
+        // High codes 0xf0-0xf9 and reserved ranges
         match tc {
             type_code::STRING_LONG => {
                 let s = self.decode_long_string_content()?;
@@ -605,20 +600,18 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Read an unsigned integer of given type code.
+    /// Read an unsigned integer of given byte size.
     #[inline]
-    fn read_unsigned_int(&mut self, tc: u8) -> Result<u64> {
-        let size = type_code::unsigned_int_size(tc);
+    fn read_unsigned_int_sized(&mut self, size: usize) -> Result<u64> {
         let bytes = self.read_bytes(size)?;
         let mut buf = [0u8; 8];
         buf[..size].copy_from_slice(bytes);
         Ok(u64::from_le_bytes(buf))
     }
 
-    /// Read a signed integer of given type code.
+    /// Read a signed integer of given byte size.
     #[inline]
-    fn read_signed_int(&mut self, tc: u8) -> Result<i64> {
-        let size = type_code::signed_int_size(tc);
+    fn read_signed_int_sized(&mut self, size: usize) -> Result<i64> {
         let bytes = self.read_bytes(size)?;
         let sign_bit = (bytes[size - 1] >> 7) & 1;
         let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };

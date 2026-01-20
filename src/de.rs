@@ -203,7 +203,8 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         // Use peek_type_code to check for null without full decode
         if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
-            self.decoder.skip_byte(); // consume the null
+            self.decoder.skip_byte(); // consume the null type code
+            self.decoder.consume_element(); // update container state
             visitor.visit_none()
         } else {
             visitor.visit_some(self)
@@ -213,7 +214,8 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         // Expect null type code directly
         if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
-            self.decoder.skip_byte();
+            self.decoder.skip_byte(); // consume the null type code
+            self.decoder.consume_element(); // update container state
             visitor.visit_unit()
         } else {
             Err(Error::Custom("expected null".into()))

@@ -35,7 +35,7 @@ The project uses a layered architecture:
 ### types.rs
 - Type codes (0x00-0xff) as defined by the BONJSON spec
 - `BigNumber` struct for arbitrary precision decimals (significand × 10^exponent)
-- Helper functions for encoding/decoding type codes
+- Helper functions for encoding/decoding type codes using mask-based dispatch
 - Resource limits (max depth, max container size, etc.)
 
 ### error.rs
@@ -100,6 +100,17 @@ The project uses a layered architecture:
 - Length field decoding uses `trailing_zeros()` intrinsic
 - Serde path uses unchecked methods that skip container state tracking
 - Inline hints on hot paths
+
+#### Type Code Dispatch (types.rs)
+The BONJSON type code layout enables efficient mask-based dispatch:
+- `0x00-0xc8`: Small integers (value = code - 100)
+- `0xd0-0xdf`: Integers - `(code & 0xf0) == 0xd0`, sign bit at `(code & 0x08)`, size from `(code & 0x07) + 1`
+- `0xe0-0xef`: Short strings - `(code & 0xf0) == 0xe0`, length from `(code & 0x0f)`
+- `0xf0-0xf9`: Other types (long string, floats, null, bool, containers)
+
+Key optimization: Combined integer check `is_any_int()` tests all integers (signed and unsigned)
+with a single mask operation, then determines sign with `int_is_signed()`. This is ~42% faster
+for type dispatch than separate unsigned/signed checks. See `examples/type_dispatch_bench.rs`.
 
 ### Compliance Levels
 - **Basic compliance**: UTF-8 validation, NUL character rejection, duplicate key detection (byte-for-byte comparison)
