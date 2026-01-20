@@ -154,25 +154,20 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    /// Begin an array without state checks.
-    /// Note: Does not track container state - caller must ensure correct nesting.
+    /// Begin an array with known element count without state checks.
+    /// Writes type code and chunk header in one operation.
     #[inline]
-    pub(crate) fn begin_array_unchecked(&mut self) -> Result<()> {
-        self.write_byte(type_code::ARRAY_START)
+    pub(crate) fn begin_array_unchecked(&mut self, element_count: usize) -> Result<()> {
+        self.write_byte(type_code::ARRAY)?;
+        self.write_length_field(element_count as u64, false)
     }
 
-    /// Begin an object without state checks.
-    /// Note: Does not track container state - caller must ensure correct nesting.
+    /// Begin an object with known pair count without state checks.
+    /// Writes type code and chunk header in one operation.
     #[inline]
-    pub(crate) fn begin_object_unchecked(&mut self) -> Result<()> {
-        self.write_byte(type_code::OBJECT_START)
-    }
-
-    /// End container without state checks.
-    /// Note: Does not track container state - caller must ensure correct nesting.
-    #[inline]
-    pub(crate) fn end_container_unchecked(&mut self) -> Result<()> {
-        self.write_byte(type_code::CONTAINER_END)
+    pub(crate) fn begin_object_unchecked(&mut self, pair_count: usize) -> Result<()> {
+        self.write_byte(type_code::OBJECT)?;
+        self.write_length_field(pair_count as u64, false)
     }
 
     /// Write a single byte.
@@ -372,16 +367,20 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    /// Begin encoding an array.
+    /// Begin encoding an array with known element count.
+    ///
+    /// With chunked container encoding, the element count must be known upfront.
+    /// All elements should be written after this call.
     ///
     /// # Errors
     ///
     /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
-    pub fn begin_array(&mut self) -> Result<()> {
+    pub fn begin_array(&mut self, element_count: usize) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
         }
-        self.write_byte(type_code::ARRAY_START)?;
+        self.write_byte(type_code::ARRAY)?;
+        self.write_length_field(element_count as u64, false)?;
         self.containers.push(ContainerState {
             is_object: false,
             expecting_key: false,
@@ -389,16 +388,20 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    /// Begin encoding an object.
+    /// Begin encoding an object with known pair count.
+    ///
+    /// With chunked container encoding, the pair count must be known upfront.
+    /// All key-value pairs should be written after this call.
     ///
     /// # Errors
     ///
     /// Returns [`Error::ExpectedObjectKey`] if called when an object key is expected.
-    pub fn begin_object(&mut self) -> Result<()> {
+    pub fn begin_object(&mut self, pair_count: usize) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
         }
-        self.write_byte(type_code::OBJECT_START)?;
+        self.write_byte(type_code::OBJECT)?;
+        self.write_length_field(pair_count as u64, false)?;
         self.containers.push(ContainerState {
             is_object: true,
             expecting_key: true,
@@ -407,6 +410,9 @@ impl<W: Write> Encoder<W> {
     }
 
     /// End the current container (array or object).
+    ///
+    /// With chunked encoding, this just updates internal state (the chunk header
+    /// already specified the container size).
     ///
     /// # Errors
     ///
@@ -424,7 +430,6 @@ impl<W: Write> Encoder<W> {
             return Err(Error::ExpectedObjectValue);
         }
 
-        self.write_byte(type_code::CONTAINER_END)?;
         self.toggle_object_state();
         Ok(())
     }
@@ -448,14 +453,15 @@ impl<W: Write> Encoder<W> {
     /// Write an unsigned integer using the optimal encoding.
     #[allow(clippy::cast_possible_truncation)] // value <= 100 checked; byte_count <= 8
     fn write_unsigned_int(&mut self, value: u64) -> Result<()> {
-        // Small integer range: 0-100
+        // Small integer range: 0-100 (type codes 0x64-0xc8)
         if value <= 100 {
-            return self.write_byte(value as u8);
+            // type_code = value + 100
+            return self.write_byte((value as u8) + 100);
         }
 
         let byte_count = required_unsigned_bytes_min1(value);
 
-        // Check if MSB is set - if not, we can use signed encoding (preferred)
+        // Check if MSB is set - if not, we can use signed encoding (preferred per spec)
         let msb_set = (value >> (byte_count * 8 - 1)) & 1 != 0;
         let type_code = if msb_set {
             type_code::UINT8 + (byte_count as u8) - 1
@@ -470,11 +476,12 @@ impl<W: Write> Encoder<W> {
 
     /// Write a signed integer using the optimal encoding.
     #[allow(clippy::cast_possible_truncation)] // -100..=100 checked; byte_count <= 8
-    #[allow(clippy::cast_sign_loss)] // Intentional: i64 to u8 for smallint, i64 to u64 when positive
+    #[allow(clippy::cast_sign_loss)] // Intentional: i64 to u64 when positive
     fn write_signed_int(&mut self, value: i64) -> Result<()> {
-        // Small integer range: -100 to 100
+        // Small integer range: -100 to 100 (type codes 0x00-0xc8)
         if (-100..=100).contains(&value) {
-            return self.write_byte(value as u8);
+            // type_code = value + 100
+            return self.write_byte((value + 100) as u8);
         }
 
         let byte_count = required_signed_bytes_min1(value);
@@ -531,7 +538,7 @@ impl<W: Write> Encoder<W> {
     ///
     /// The length field uses a compact encoding where the header byte
     /// contains trailing 1s terminated by a 0 to indicate the field size.
-    fn write_length_field(&mut self, length: u64, continuation: bool) -> Result<()> {
+    pub(crate) fn write_length_field(&mut self, length: u64, continuation: bool) -> Result<()> {
         // Payload = (length << 1) | continuation_bit
         let payload = (length << 1) | u64::from(continuation);
 
@@ -659,38 +666,44 @@ mod tests {
 
     #[test]
     fn test_encode_small_ints() {
+        // 0 → type_code = 0 + 100 = 0x64
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(0).unwrap();
-        assert_eq!(buf, vec![0x00]);
+        assert_eq!(buf, vec![0x64]);
 
+        // 100 → type_code = 100 + 100 = 0xc8
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(100).unwrap();
-        assert_eq!(buf, vec![0x64]);
+        assert_eq!(buf, vec![0xc8]);
 
+        // -100 → type_code = -100 + 100 = 0x00
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(-100).unwrap();
-        assert_eq!(buf, vec![0x9c]);
+        assert_eq!(buf, vec![0x00]);
 
+        // -1 → type_code = -1 + 100 = 0x63
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(-1).unwrap();
-        assert_eq!(buf, vec![0xff]);
+        assert_eq!(buf, vec![0x63]);
     }
 
     #[test]
     fn test_encode_larger_ints() {
+        // 1000 as sint16 (0xd9)
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(1000).unwrap();
-        assert_eq!(buf, vec![0x79, 0xe8, 0x03]); // sint16
+        assert_eq!(buf, vec![0xd9, 0xe8, 0x03]);
 
+        // 180 as uint8 (0xd0) - can't fit in small int (0-100)
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_u64(180).unwrap();
-        assert_eq!(buf, vec![0x70, 0xb4]); // uint8
+        assert_eq!(buf, vec![0xd0, 0xb4]);
     }
 
     #[test]
@@ -698,75 +711,84 @@ mod tests {
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_null().unwrap();
-        assert_eq!(buf, vec![0x6d]);
+        assert_eq!(buf, vec![0xf5]);
 
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_bool(true).unwrap();
-        assert_eq!(buf, vec![0x6f]);
+        assert_eq!(buf, vec![0xf7]);
 
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_bool(false).unwrap();
-        assert_eq!(buf, vec![0x6e]);
+        assert_eq!(buf, vec![0xf6]);
     }
 
     #[test]
     fn test_encode_short_string() {
+        // Empty string: 0xe0
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str("").unwrap();
-        assert_eq!(buf, vec![0x80]);
+        assert_eq!(buf, vec![0xe0]);
 
+        // "A": 0xe1 + 'A'
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str("A").unwrap();
-        assert_eq!(buf, vec![0x81, 0x41]);
+        assert_eq!(buf, vec![0xe1, 0x41]);
 
+        // "x": 0xe1 + 'x'
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str("x").unwrap();
-        assert_eq!(buf, vec![0x81, 0x78]);
+        assert_eq!(buf, vec![0xe1, 0x78]);
     }
 
     #[test]
     fn test_encode_empty_containers() {
+        // Empty array: 0xf8 + chunk(count=0, cont=0) = 0xf8 0x00
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
-        enc.begin_array().unwrap();
+        enc.begin_array(0).unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0x99, 0x9b]);
+        assert_eq!(buf, vec![0xf8, 0x00]);
 
+        // Empty object: 0xf9 + chunk(count=0, cont=0) = 0xf9 0x00
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
-        enc.begin_object().unwrap();
+        enc.begin_object(0).unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0x9a, 0x9b]);
+        assert_eq!(buf, vec![0xf9, 0x00]);
     }
 
     #[test]
     fn test_encode_array_with_values() {
         // [1, "x", null]
+        // 0xf8 + chunk(count=3, cont=0) + 0x65 + 0xe1 0x78 + 0xf5
+        // chunk: payload = (3 << 1) | 0 = 6, encoded = (6 << 1) | 0 = 12 = 0x0c
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
-        enc.begin_array().unwrap();
+        enc.begin_array(3).unwrap();
         enc.write_i64(1).unwrap();
         enc.write_str("x").unwrap();
         enc.write_null().unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0x99, 0x01, 0x81, 0x78, 0x6d, 0x9b]);
+        assert_eq!(buf, vec![0xf8, 0x0c, 0x65, 0xe1, 0x78, 0xf5]);
     }
 
     #[test]
     fn test_encode_object() {
         // {"a": 1}
+        // 0xf9 + chunk(count=1, cont=0) + 0xe1 0x61 + 0x65
+        // chunk: payload = (1 << 1) | 0 = 2, encoded = (2 << 1) | 0 = 4 = 0x04
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
-        enc.begin_object().unwrap();
+        enc.begin_object(1).unwrap();
         enc.write_str("a").unwrap();
         enc.write_i64(1).unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0x9a, 0x81, 0x61, 0x01, 0x9b]);
+        assert_eq!(buf, vec![0xf9, 0x04, 0xe1, 0x61, 0x65]);
     }
 
     #[test]
@@ -775,7 +797,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_f64(1.125).unwrap();
-        assert_eq!(buf, vec![0x6a, 0x90, 0x3f]);
+        assert_eq!(buf, vec![0xf2, 0x90, 0x3f]);
     }
 
     #[test]
@@ -783,23 +805,23 @@ mod tests {
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
 
-        // Length 0, no continuation
+        // Length 0, no continuation → payload = 0, encoded = 0x00
         enc.write_length_field(0, false).unwrap();
         assert_eq!(buf, vec![0x00]);
 
-        // Length 0, with continuation
+        // Length 0, with continuation → payload = 1, encoded = 0x02
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_length_field(0, true).unwrap();
         assert_eq!(buf, vec![0x02]);
 
-        // Length 63, no continuation (payload = 126 = 0x7e, fits in 7 bits)
+        // Length 63, no continuation → payload = 126 = 0x7e, encoded = 0xfc
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_length_field(63, false).unwrap();
         assert_eq!(buf, vec![0xfc]);
 
-        // Length 64, no continuation (payload = 128, needs 2 bytes)
+        // Length 64, no continuation → payload = 128, needs 2 bytes
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_length_field(64, false).unwrap();

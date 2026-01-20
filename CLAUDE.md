@@ -56,7 +56,7 @@ The project uses a layered architecture:
 - `DecoderConfig` for configurable limits and options
 - `DuplicateKeyMode` - Error, KeepFirst, or KeepLast
 - Uses compiler intrinsics (`trailing_zeros()`) for efficient length field decoding
-- Validates UTF-8 per chunk (catches split multi-byte characters)
+- Validates UTF-8 on complete assembled strings (multi-chunk strings are concatenated first)
 - Returns `DecodedValue<'a>` enum for streaming access
 
 ### value.rs
@@ -95,15 +95,15 @@ The project uses a layered architecture:
 #### Decoder (de.rs, decoder.rs)
 - Zero-copy string decoding for single-chunk strings
 - Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum - avoids intermediate allocation and match overhead
-- `try_consume_container_end()` combines bounds check, container-end check, and position increment into one operation
+- `try_consume_container_end()` checks if current chunk is exhausted with no continuation, pops container state if so
 - Short ASCII strings (≤32 bytes) skip UTF-8 validation since ASCII is always valid UTF-8
 - Length field decoding uses `trailing_zeros()` intrinsic
 - Serde path uses unchecked methods that skip container state tracking
 - Inline hints on hot paths
 
 ### Compliance Levels
-- **Basic compliance**: UTF-8 validation per chunk, NUL character rejection
-- **Standard compliance**: Duplicate key detection with Error mode
+- **Basic compliance**: UTF-8 validation, NUL character rejection, duplicate key detection (byte-for-byte comparison)
+- **Secure compliance**: Same as basic plus NFC normalization for duplicate key detection (not yet implemented)
 - Optional features: NaN/Infinity handling, duplicate key keep_first/keep_last modes
 
 ### Known Limitations

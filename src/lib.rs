@@ -162,7 +162,7 @@ use std::io::{Read, Write};
 /// use serde_bonjson::to_vec;
 ///
 /// let bytes = to_vec(&42i32).unwrap();
-/// assert_eq!(bytes, vec![0x2a]); // Small integer 42
+/// assert_eq!(bytes, vec![0x8e]); // Small integer 42 (type_code = 42 + 100 = 142 = 0x8e)
 /// ```
 ///
 /// # Performance Note
@@ -238,7 +238,7 @@ pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
 /// use serde_bonjson::from_reader;
 /// use std::io::Cursor;
 ///
-/// let data = Cursor::new(vec![0x2a]); // Small integer 42
+/// let data = Cursor::new(vec![0x8e]); // Small integer 42 (type_code = 42 + 100 = 142 = 0x8e)
 /// let value: i32 = from_reader(data).unwrap();
 /// assert_eq!(value, 42);
 /// ```
@@ -361,7 +361,8 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
 /// ```rust
 /// use serde_bonjson::{decode_value, Value};
 ///
-/// let bytes = vec![0x99, 0x01, 0x02, 0x03, 0x9b]; // [1, 2, 3]
+/// // [1, 2, 3]: array type (0xf8) + chunk header (count=3, cont=0 → 0x0c) + elements
+/// let bytes = vec![0xf8, 0x0c, 0x65, 0x66, 0x67];
 /// let value = decode_value(&bytes).unwrap();
 /// assert!(value.is_array());
 /// ```
@@ -409,25 +410,17 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
         DecodedValue::String(s) => Ok(Value::String(s.to_owned())),
         DecodedValue::ArrayStart => {
             let mut arr = Vec::new();
-            loop {
-                // Peek at next value to check for container end
-                let next = decoder.decode_value()?;
-                if matches!(next, DecodedValue::ContainerEnd) {
-                    break;
-                }
-                // We need to handle the value we just decoded
-                arr.push(decode_value_from_decoded(next, decoder)?);
+            while !decoder.is_at_container_end()? {
+                arr.push(decode_value_recursive(decoder)?);
             }
+            decoder.end_container()?;
             Ok(Value::Array(arr))
         }
         DecodedValue::ObjectStart => {
             let dup_mode = decoder.config().duplicate_key_mode;
             let mut map = std::collections::BTreeMap::new();
-            loop {
+            while !decoder.is_at_container_end()? {
                 let key_value = decoder.decode_value()?;
-                if matches!(key_value, DecodedValue::ContainerEnd) {
-                    break;
-                }
                 let key = match key_value {
                     DecodedValue::String(s) => s.to_owned(),
                     _ => return Err(Error::ExpectedObjectKey),
@@ -448,58 +441,7 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
                 }
                 map.insert(key, value);
             }
-            Ok(Value::Object(map))
-        }
-        DecodedValue::ContainerEnd => Err(Error::UnbalancedContainers),
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)] // DecodedValue is small and Copy-like
-fn decode_value_from_decoded(value: DecodedValue<'_>, dec: &mut Decoder<'_>) -> Result<Value> {
-    use decoder::DuplicateKeyMode;
-
-    match value {
-        DecodedValue::Null => Ok(Value::Null),
-        DecodedValue::Bool(b) => Ok(Value::Bool(b)),
-        DecodedValue::Int(n) => Ok(Value::Int(n)),
-        DecodedValue::UInt(n) => Ok(Value::UInt(n)),
-        DecodedValue::Float(f) => Ok(Value::Float(f)),
-        DecodedValue::BigNumber(bn) => Ok(Value::BigNumber(bn)),
-        DecodedValue::String(s) => Ok(Value::String(s.to_owned())),
-        DecodedValue::ArrayStart => {
-            let mut arr = Vec::new();
-            loop {
-                let next = dec.decode_value()?;
-                if matches!(next, DecodedValue::ContainerEnd) {
-                    break;
-                }
-                arr.push(decode_value_from_decoded(next, dec)?);
-            }
-            Ok(Value::Array(arr))
-        }
-        DecodedValue::ObjectStart => {
-            let dup_mode = dec.config().duplicate_key_mode;
-            let mut map = std::collections::BTreeMap::new();
-            loop {
-                let key_value = dec.decode_value()?;
-                if matches!(key_value, DecodedValue::ContainerEnd) {
-                    break;
-                }
-                let key = match key_value {
-                    DecodedValue::String(s) => s.to_owned(),
-                    _ => return Err(Error::ExpectedObjectKey),
-                };
-                let val = decode_value_recursive(dec)?;
-                // Check for duplicate key
-                if map.contains_key(&key) {
-                    match dup_mode {
-                        DuplicateKeyMode::Error => return Err(Error::DuplicateKey),
-                        DuplicateKeyMode::KeepFirst => continue,
-                        DuplicateKeyMode::KeepLast => {}
-                    }
-                }
-                map.insert(key, val);
-            }
+            decoder.end_container()?;
             Ok(Value::Object(map))
         }
         DecodedValue::ContainerEnd => Err(Error::UnbalancedContainers),
@@ -515,7 +457,7 @@ fn decode_value_from_decoded(value: DecodedValue<'_>, dec: &mut Decoder<'_>) -> 
 ///
 /// let value = Value::Int(42);
 /// let bytes = encode_value(&value).unwrap();
-/// assert_eq!(bytes, vec![0x2a]);
+/// assert_eq!(bytes, vec![0x8e]); // 42 + 100 = 142 = 0x8e
 /// ```
 ///
 /// # Errors
@@ -549,14 +491,14 @@ fn encode_value_recursive<W: Write>(encoder: &mut Encoder<W>, value: &Value) -> 
         Value::BigNumber(bn) => encoder.write_big_number(*bn),
         Value::String(s) => encoder.write_str(s),
         Value::Array(arr) => {
-            encoder.begin_array()?;
+            encoder.begin_array(arr.len())?;
             for item in arr {
                 encode_value_recursive(encoder, item)?;
             }
             encoder.end_container()
         }
         Value::Object(map) => {
-            encoder.begin_object()?;
+            encoder.begin_object(map.len())?;
             for (key, val) in map {
                 encoder.write_str(key)?;
                 encode_value_recursive(encoder, val)?;

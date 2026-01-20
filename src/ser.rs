@@ -85,11 +85,11 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
 
     fn serialize_bytes(self, v: &[u8]) -> Result<()> {
         // Encode bytes as an array of integers
-        self.encoder.begin_array_unchecked()?;
+        self.encoder.begin_array_unchecked(v.len())?;
         for &byte in v {
             self.encoder.write_u64_unchecked(u64::from(byte))?;
         }
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<()> {
@@ -132,28 +132,30 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
         variant: &'static str,
         value: &T,
     ) -> Result<()> {
-        self.encoder.begin_object_unchecked()?;
+        self.encoder.begin_object_unchecked(1)?;
         self.encoder.write_str_unchecked(variant)?;
-        value.serialize(&mut *self)?;
-        self.encoder.end_container_unchecked()
+        value.serialize(&mut *self)
     }
 
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
-        self.encoder.begin_array_unchecked()?;
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
+        let len = len.ok_or_else(|| {
+            Error::InvalidData("BONJSON requires known sequence length".into())
+        })?;
+        self.encoder.begin_array_unchecked(len)?;
         Ok(self)
     }
 
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
-        self.encoder.begin_array_unchecked()?;
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple> {
+        self.encoder.begin_array_unchecked(len)?;
         Ok(self)
     }
 
     fn serialize_tuple_struct(
         self,
         _name: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        self.encoder.begin_array_unchecked()?;
+        self.encoder.begin_array_unchecked(len)?;
         Ok(self)
     }
 
@@ -162,21 +164,24 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.encoder.begin_object_unchecked()?;
+        self.encoder.begin_object_unchecked(1)?;
         self.encoder.write_str_unchecked(variant)?;
-        self.encoder.begin_array_unchecked()?;
+        self.encoder.begin_array_unchecked(len)?;
         Ok(self)
     }
 
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        self.encoder.begin_object_unchecked()?;
+    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
+        let len = len.ok_or_else(|| {
+            Error::InvalidData("BONJSON requires known map length".into())
+        })?;
+        self.encoder.begin_object_unchecked(len)?;
         Ok(self)
     }
 
-    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
-        self.encoder.begin_object_unchecked()?;
+    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
+        self.encoder.begin_object_unchecked(len)?;
         Ok(self)
     }
 
@@ -185,11 +190,11 @@ impl<W: Write> ser::Serializer for &mut Serializer<'_, W> {
         _name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.encoder.begin_object_unchecked()?;
+        self.encoder.begin_object_unchecked(1)?;
         self.encoder.write_str_unchecked(variant)?;
-        self.encoder.begin_object_unchecked()?;
+        self.encoder.begin_object_unchecked(len)?;
         Ok(self)
     }
 }
@@ -203,7 +208,7 @@ impl<W: Write> ser::SerializeSeq for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 }
 
@@ -216,7 +221,7 @@ impl<W: Write> ser::SerializeTuple for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 }
 
@@ -229,7 +234,7 @@ impl<W: Write> ser::SerializeTupleStruct for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 }
 
@@ -242,8 +247,7 @@ impl<W: Write> ser::SerializeTupleVariant for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()?; // Close array
-        self.encoder.end_container_unchecked() // Close object
+        Ok(())
     }
 }
 
@@ -260,7 +264,7 @@ impl<W: Write> ser::SerializeMap for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 }
 
@@ -278,7 +282,7 @@ impl<W: Write> ser::SerializeStruct for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()
+        Ok(())
     }
 }
 
@@ -296,8 +300,7 @@ impl<W: Write> ser::SerializeStructVariant for &mut Serializer<'_, W> {
     }
 
     fn end(self) -> Result<()> {
-        self.encoder.end_container_unchecked()?; // Close inner object
-        self.encoder.end_container_unchecked() // Close outer object
+        Ok(())
     }
 }
 

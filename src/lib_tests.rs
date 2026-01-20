@@ -78,15 +78,17 @@ fn test_value_roundtrip() {
 
 #[test]
 fn test_decode_spec_example() {
-    // Example from the spec: {"number": 50, ...}
-    // Just test the "number": 50 part
-    // 9a 86 6e 75 6d 62 65 72 32 9b
-    // object_start, "number" (6 chars), 50, object_end
+    // Example: {"number": 50}
+    // New format with chunked containers:
+    // - object: 0xf9
+    // - chunk header (count=1): 0x04
+    // - "number" (6 chars): 0xe6 + bytes
+    // - 50 as small int: 50 + 100 = 150 = 0x96
     let bytes = vec![
-        0x9a, // object start
-        0x86, b'n', b'u', b'm', b'b', b'e', b'r', // "number"
-        0x32, // 50
-        0x9b, // container end
+        0xf9, // object
+        0x04, // chunk header: count=1, cont=0
+        0xe6, b'n', b'u', b'm', b'b', b'e', b'r', // "number"
+        0x96, // 50
     ];
 
     let value = decode_value(&bytes).unwrap();

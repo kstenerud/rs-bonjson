@@ -350,7 +350,7 @@ impl<T: Into<Value>> FromIterator<T> for Value {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```rust
 /// use serde_bonjson::bonjson;
 ///
 /// let value = bonjson!({

@@ -6,25 +6,31 @@ use serde::Deserialize;
 
 #[test]
 fn test_deserialize_primitives() {
-    assert!(from_slice::<bool>(&[0x6f]).unwrap());
-    assert!(!from_slice::<bool>(&[0x6e]).unwrap());
-    assert_eq!(from_slice::<i32>(&[0x2a]).unwrap(), 42);
+    // true: 0xf7, false: 0xf6
+    assert!(from_slice::<bool>(&[0xf7]).unwrap());
+    assert!(!from_slice::<bool>(&[0xf6]).unwrap());
+    // 42 as small int: 42 + 100 = 142 = 0x8e
+    assert_eq!(from_slice::<i32>(&[0x8e]).unwrap(), 42);
+    // "hello" (5 chars): 0xe5 + bytes
     assert_eq!(
-        from_slice::<String>(&[0x85, b'h', b'e', b'l', b'l', b'o']).unwrap(),
+        from_slice::<String>(&[0xe5, b'h', b'e', b'l', b'l', b'o']).unwrap(),
         "hello"
     );
 }
 
 #[test]
 fn test_deserialize_option() {
-    assert_eq!(from_slice::<Option<i32>>(&[0x6d]).unwrap(), None);
-    assert_eq!(from_slice::<Option<i32>>(&[0x2a]).unwrap(), Some(42));
+    // null: 0xf5
+    assert_eq!(from_slice::<Option<i32>>(&[0xf5]).unwrap(), None);
+    // 42 as small int: 0x8e
+    assert_eq!(from_slice::<Option<i32>>(&[0x8e]).unwrap(), Some(42));
 }
 
 #[test]
 fn test_deserialize_vec() {
+    // [1, 2, 3]: array 0xf8 + chunk(count=3) 0x0c + elements 0x65 0x66 0x67
     assert_eq!(
-        from_slice::<Vec<i32>>(&[0x99, 0x01, 0x02, 0x03, 0x9b]).unwrap(),
+        from_slice::<Vec<i32>>(&[0xf8, 0x0c, 0x65, 0x66, 0x67]).unwrap(),
         vec![1, 2, 3]
     );
 }
@@ -37,8 +43,8 @@ fn test_deserialize_struct() {
         y: i32,
     }
 
-    // {"x": 1, "y": 2}
-    let bytes = vec![0x9a, 0x81, b'x', 0x01, 0x81, b'y', 0x02, 0x9b];
+    // {"x": 1, "y": 2}: object 0xf9 + chunk(count=2) 0x08 + "x" + 1 + "y" + 2
+    let bytes = vec![0xf9, 0x08, 0xe1, b'x', 0x65, 0xe1, b'y', 0x66];
     assert_eq!(from_slice::<Point>(&bytes).unwrap(), Point { x: 1, y: 2 });
 }
 
@@ -51,8 +57,8 @@ fn test_deserialize_enum() {
         Blue,
     }
 
-    // "Red"
-    let bytes = vec![0x83, b'R', b'e', b'd'];
+    // "Red" (3 chars): 0xe3 + bytes
+    let bytes = vec![0xe3, b'R', b'e', b'd'];
     assert_eq!(from_slice::<Color>(&bytes).unwrap(), Color::Red);
 }
 
@@ -126,7 +132,7 @@ fn test_serde_default_with_value() {
 
 #[test]
 fn test_serde_skip_deserializing() {
-    #[derive(Debug, Deserialize, PartialEq)]
+    #[derive(Debug, Deserialize, PartialEq, Default)]
     struct Data {
         name: String,
         #[serde(skip_deserializing)]
@@ -296,8 +302,8 @@ fn test_complex_nested_structure() {
 fn test_from_slice_with_config_allow_nul() {
     use crate::decoder::DecoderConfig;
 
-    // String containing NUL: "a\0b"
-    let bytes = vec![0x83, b'a', 0x00, b'b'];
+    // String containing NUL: "a\0b" (3 chars): 0xe3 + bytes
+    let bytes = vec![0xe3, b'a', 0x00, b'b'];
 
     // Default config should fail
     assert!(from_slice::<String>(&bytes).is_err());

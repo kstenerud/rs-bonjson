@@ -5,25 +5,37 @@ use crate::types::{type_code, BigNumber};
 
 #[test]
 fn test_small_int_codes() {
-    assert!(type_code::is_small_int(0));
-    assert!(type_code::is_small_int(100));
-    assert!(type_code::is_small_int(0x9c)); // -100
-    assert!(type_code::is_small_int(0xff)); // -1
+    // Small integers: 0x00-0xc8 (values -100 to 100, type_code = value + 100)
+    assert!(type_code::is_small_int(0x00)); // -100
+    assert!(type_code::is_small_int(0x64)); // 0
+    assert!(type_code::is_small_int(0xc8)); // 100
+    assert!(!type_code::is_small_int(0xc9)); // Reserved
 
-    assert_eq!(type_code::small_int_value(0), 0);
-    assert_eq!(type_code::small_int_value(100), 100);
-    assert_eq!(type_code::small_int_value(0xff), -1);
-    assert_eq!(type_code::small_int_value(0x9c), -100);
+    // small_int_value: type_code - 100
+    assert_eq!(type_code::small_int_value(0x00), -100);
+    assert_eq!(type_code::small_int_value(0x63), -1);
+    assert_eq!(type_code::small_int_value(0x64), 0);
+    assert_eq!(type_code::small_int_value(0x65), 1);
+    assert_eq!(type_code::small_int_value(0xc8), 100);
+
+    // small_int_code: value + 100
+    assert_eq!(type_code::small_int_code(-100), 0x00);
+    assert_eq!(type_code::small_int_code(-1), 0x63);
+    assert_eq!(type_code::small_int_code(0), 0x64);
+    assert_eq!(type_code::small_int_code(1), 0x65);
+    assert_eq!(type_code::small_int_code(100), 0xc8);
 }
 
 #[test]
 fn test_short_string_codes() {
-    assert!(type_code::is_short_string(0x80));
-    assert!(type_code::is_short_string(0x8f));
-    assert!(!type_code::is_short_string(0x79));
+    // Short strings: 0xe0-0xef
+    assert!(type_code::is_short_string(0xe0));
+    assert!(type_code::is_short_string(0xef));
+    assert!(!type_code::is_short_string(0xdf));
+    assert!(!type_code::is_short_string(0xf0));
 
-    assert_eq!(type_code::short_string_len(0x80), 0);
-    assert_eq!(type_code::short_string_len(0x8f), 15);
+    assert_eq!(type_code::short_string_len(0xe0), 0);
+    assert_eq!(type_code::short_string_len(0xef), 15);
 }
 
 #[test]

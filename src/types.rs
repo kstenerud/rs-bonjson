@@ -5,119 +5,137 @@
 /// Type codes for BONJSON values.
 /// These match the BONJSON specification exactly.
 pub mod type_code {
-    // Small integers: 0x00-0x64 (0-100), 0x9c-0xff (-100 to -1)
-    pub const SMALLINT_MIN: u8 = 0x9c; // -100 as i8
-    pub const SMALLINT_MAX: u8 = 0x64; // 100
+    // Small integers: 0x00-0xc8 (values -100 to 100, computed as type_code - 100)
+    pub const SMALLINT_MIN: u8 = 0x00; // -100 (0 - 100 = -100)
+    pub const SMALLINT_MAX: u8 = 0xc8; // 100 (200 - 100 = 100)
+    pub const SMALLINT_ZERO: u8 = 0x64; // 0 (100 - 100 = 0)
 
-    // Reserved: 0x65-0x67
-    pub const RESERVED_65: u8 = 0x65;
-    pub const RESERVED_66: u8 = 0x66;
-    pub const RESERVED_67: u8 = 0x67;
+    // Reserved: 0xc9-0xcf
+    pub const RESERVED_C9: u8 = 0xc9;
+    pub const RESERVED_CF: u8 = 0xcf;
+
+    // Unsigned integers (1-8 bytes): 0xd0-0xd7
+    pub const UINT8: u8 = 0xd0;
+    pub const UINT16: u8 = 0xd1;
+    pub const UINT24: u8 = 0xd2;
+    pub const UINT32: u8 = 0xd3;
+    pub const UINT40: u8 = 0xd4;
+    pub const UINT48: u8 = 0xd5;
+    pub const UINT56: u8 = 0xd6;
+    pub const UINT64: u8 = 0xd7;
+
+    // Signed integers (1-8 bytes): 0xd8-0xdf
+    pub const SINT8: u8 = 0xd8;
+    pub const SINT16: u8 = 0xd9;
+    pub const SINT24: u8 = 0xda;
+    pub const SINT32: u8 = 0xdb;
+    pub const SINT40: u8 = 0xdc;
+    pub const SINT48: u8 = 0xdd;
+    pub const SINT56: u8 = 0xde;
+    pub const SINT64: u8 = 0xdf;
+
+    // Short strings (0-15 bytes): 0xe0-0xef
+    pub const STRING0: u8 = 0xe0;
+    pub const STRING15: u8 = 0xef;
 
     // Long string
-    pub const STRING_LONG: u8 = 0x68;
+    pub const STRING_LONG: u8 = 0xf0;
 
     // Big number
-    pub const BIG_NUMBER: u8 = 0x69;
+    pub const BIG_NUMBER: u8 = 0xf1;
 
     // Floats
-    pub const FLOAT16: u8 = 0x6a;
-    pub const FLOAT32: u8 = 0x6b;
-    pub const FLOAT64: u8 = 0x6c;
+    pub const FLOAT16: u8 = 0xf2;
+    pub const FLOAT32: u8 = 0xf3;
+    pub const FLOAT64: u8 = 0xf4;
 
     // Null and booleans
-    pub const NULL: u8 = 0x6d;
-    pub const FALSE: u8 = 0x6e;
-    pub const TRUE: u8 = 0x6f;
+    pub const NULL: u8 = 0xf5;
+    pub const FALSE: u8 = 0xf6;
+    pub const TRUE: u8 = 0xf7;
 
-    // Unsigned integers (1-8 bytes): 0x70-0x77
-    pub const UINT8: u8 = 0x70;
-    pub const UINT16: u8 = 0x71;
-    pub const UINT24: u8 = 0x72;
-    pub const UINT32: u8 = 0x73;
-    pub const UINT40: u8 = 0x74;
-    pub const UINT48: u8 = 0x75;
-    pub const UINT56: u8 = 0x76;
-    pub const UINT64: u8 = 0x77;
+    // Containers (chunked encoding, no end marker)
+    pub const ARRAY: u8 = 0xf8;
+    pub const OBJECT: u8 = 0xf9;
 
-    // Signed integers (1-8 bytes): 0x78-0x7f
-    pub const SINT8: u8 = 0x78;
-    pub const SINT16: u8 = 0x79;
-    pub const SINT24: u8 = 0x7a;
-    pub const SINT32: u8 = 0x7b;
-    pub const SINT40: u8 = 0x7c;
-    pub const SINT48: u8 = 0x7d;
-    pub const SINT56: u8 = 0x7e;
-    pub const SINT64: u8 = 0x7f;
-
-    // Short strings (0-15 bytes): 0x80-0x8f
-    pub const STRING0: u8 = 0x80;
-    pub const STRING15: u8 = 0x8f;
-
-    // Reserved: 0x90-0x98
-    pub const RESERVED_90: u8 = 0x90;
-    pub const RESERVED_98: u8 = 0x98;
-
-    // Containers
-    pub const ARRAY_START: u8 = 0x99;
-    pub const OBJECT_START: u8 = 0x9a;
-    pub const CONTAINER_END: u8 = 0x9b;
+    // Reserved: 0xfa-0xff
+    pub const RESERVED_FA: u8 = 0xfa;
+    pub const RESERVED_FF: u8 = 0xff;
 
     /// Check if a type code is a small integer (-100 to 100)
     #[inline]
-    #[must_use] pub const fn is_small_int(code: u8) -> bool {
-        code <= SMALLINT_MAX || code >= SMALLINT_MIN
+    #[must_use]
+    pub const fn is_small_int(code: u8) -> bool {
+        code <= SMALLINT_MAX
     }
 
-    /// Decode a small integer type code to its value
+    /// Decode a small integer type code to its value (type_code - 100)
     #[inline]
     #[must_use]
-    #[allow(clippy::cast_possible_wrap)] // Intentional: BONJSON small ints use two's complement
     pub const fn small_int_value(code: u8) -> i8 {
-        code as i8
+        // code is 0x00-0xc8, subtract 100 to get -100 to 100
+        (code as i16 - 100) as i8
+    }
+
+    /// Encode a small integer value (-100 to 100) to its type code
+    #[inline]
+    #[must_use]
+    pub const fn small_int_code(value: i8) -> u8 {
+        // value is -100 to 100, add 100 to get 0x00-0xc8
+        (value as i16 + 100) as u8
     }
 
     /// Check if a type code is a short string (0-15 bytes)
     #[inline]
-    #[must_use] pub const fn is_short_string(code: u8) -> bool {
-        code >= STRING0 && code <= STRING15
+    #[must_use]
+    pub const fn is_short_string(code: u8) -> bool {
+        // 0xe0-0xef: (code & 0xf0) == 0xe0
+        (code & 0xf0) == 0xe0
     }
 
     /// Get the length of a short string from its type code
     #[inline]
-    #[must_use] pub const fn short_string_len(code: u8) -> usize {
-        (code - STRING0) as usize
+    #[must_use]
+    pub const fn short_string_len(code: u8) -> usize {
+        (code & 0x0f) as usize
     }
 
-    /// Check if a type code is an unsigned integer
+    /// Check if a type code is an unsigned integer (0xd0-0xd7)
     #[inline]
-    #[must_use] pub const fn is_unsigned_int(code: u8) -> bool {
-        code >= UINT8 && code <= UINT64
+    #[must_use]
+    pub const fn is_unsigned_int(code: u8) -> bool {
+        // (code & 0xf8) == 0xd0
+        (code & 0xf8) == 0xd0
     }
 
     /// Get the byte count for an unsigned integer type code
     #[inline]
-    #[must_use] pub const fn unsigned_int_size(code: u8) -> usize {
-        (code - UINT8 + 1) as usize
+    #[must_use]
+    pub const fn unsigned_int_size(code: u8) -> usize {
+        ((code & 0x07) + 1) as usize
     }
 
-    /// Check if a type code is a signed integer
+    /// Check if a type code is a signed integer (0xd8-0xdf)
     #[inline]
-    #[must_use] pub const fn is_signed_int(code: u8) -> bool {
-        code >= SINT8 && code <= SINT64
+    #[must_use]
+    pub const fn is_signed_int(code: u8) -> bool {
+        // (code & 0xf8) == 0xd8
+        (code & 0xf8) == 0xd8
     }
 
     /// Get the byte count for a signed integer type code
     #[inline]
-    #[must_use] pub const fn signed_int_size(code: u8) -> usize {
-        (code - SINT8 + 1) as usize
+    #[must_use]
+    pub const fn signed_int_size(code: u8) -> usize {
+        ((code & 0x07) + 1) as usize
     }
 
     /// Check if a type code is reserved
     #[inline]
-    #[must_use] pub const fn is_reserved(code: u8) -> bool {
-        (code >= RESERVED_65 && code <= RESERVED_67)
-            || (code >= RESERVED_90 && code <= RESERVED_98)
+    #[must_use]
+    pub const fn is_reserved(code: u8) -> bool {
+        (code >= RESERVED_C9 && code <= RESERVED_CF)
+            || code >= RESERVED_FA
     }
 }
 

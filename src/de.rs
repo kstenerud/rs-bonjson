@@ -165,22 +165,27 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        use crate::types::type_code;
+
         // Expect array start
         self.decoder.expect_array_start()?;
         let mut bytes = Vec::new();
         loop {
-            if self.decoder.is_at_container_end()? {
-                self.decoder.skip_byte(); // skip container end
+            if self.decoder.try_consume_container_end()? {
                 break;
             }
-            // Each element should be a small integer 0-255
+            // Each element should be an integer 0-255
             let tc = self.decoder.peek_type_code()?;
-            if tc <= 100 {
-                // Small int 0-100
+            // Small ints: tc 0x64-0xc8 → values 0-100
+            if type_code::is_small_int(tc) {
+                let val = type_code::small_int_value(tc);
+                if val < 0 {
+                    return Err(Error::Custom("expected byte array".into()));
+                }
                 self.decoder.skip_byte();
-                bytes.push(tc);
-            } else if tc == 0x70 {
-                // uint8 (values 101-255)
+                bytes.push(val as u8);
+            } else if tc == type_code::UINT8 {
+                // uint8 (values 101-255 need this encoding)
                 self.decoder.skip_byte();
                 let b = self.decoder.read_byte_unchecked();
                 bytes.push(b);
@@ -279,13 +284,13 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     ) -> Result<V::Value> {
         use crate::types::type_code;
         let tc = self.decoder.peek_type_code()?;
-        // Check if it's a string (short: 0x80-0x8f, long: 0x68)
+        // Check if it's a string (short: 0xe0-0xef, long: 0xf0)
         if type_code::is_short_string(tc) || tc == type_code::STRING_LONG {
             // Unit variant: just a string
             visitor.visit_enum(UnitVariantDeserializer::new(self))
-        } else if tc == type_code::OBJECT_START {
+        } else if tc == type_code::OBJECT {
             // Other variants: object with single key
-            self.decoder.skip_byte(); // consume the object start
+            self.decoder.expect_object_start()?;
             visitor.visit_enum(EnumDeserializer::new(self))
         } else {
             Err(Error::Custom("expected string or object for enum".into()))
@@ -426,9 +431,9 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
         let value = seed.deserialize(&mut *self.de)?;
-        // Consume the closing container end
-        self.de.decoder.skip_container_end()
-            .map_err(|_| Error::Custom("expected container end".into()))?;
+        // With chunked containers, the outer object ends naturally after the single key-value pair
+        // Pop the container state
+        self.de.decoder.end_container()?;
         Ok(value)
     }
 
@@ -436,9 +441,9 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
         self.de.decoder.expect_array_start()?;
         let seq = SeqDeserializer::new(self.de);
         let value = visitor.visit_seq(seq)?;
-        // Consume the closing container end (for outer object)
-        self.de.decoder.skip_container_end()
-            .map_err(|_| Error::Custom("expected container end".into()))?;
+        // With chunked containers, the outer object ends naturally after the single key-value pair
+        // Pop the container state
+        self.de.decoder.end_container()?;
         Ok(value)
     }
 
@@ -450,9 +455,9 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
         self.de.decoder.expect_object_start()?;
         let map = MapDeserializer::new(self.de);
         let value = visitor.visit_map(map)?;
-        // Consume the closing container end (for outer object)
-        self.de.decoder.skip_container_end()
-            .map_err(|_| Error::Custom("expected container end".into()))?;
+        // With chunked containers, the outer object ends naturally after the single key-value pair
+        // Pop the container state
+        self.de.decoder.end_container()?;
         Ok(value)
     }
 }
