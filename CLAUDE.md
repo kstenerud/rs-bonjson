@@ -150,7 +150,20 @@ NEON (ARM) instructions when available.
 Each module has embedded `#[cfg(test)]` tests covering basic functionality.
 
 ### Conformance Tests
-`tests/conformance.rs` runs the universal BONJSON test suite from `specification/tests/conformance/`.
+`tests/conformance.rs` runs the universal BONJSON test suite from `specification/tests/`.
+
+The test runner implements the BONJSON universal test specification format with:
+- Version validation (semver format)
+- Test name validation (pattern and uniqueness)
+- Required field validation per test type
+- Option and error type validation
+- Config file support (`bonjson-test-config` type)
+- $number marker parsing (NaN, Infinity, hex floats)
+- Value comparison (NaN=NaN, -0.0≠0.0)
+
+Test categories:
+- **Conformance tests** (`specification/tests/conformance/`): Validate the codec
+- **Test runner validation** (`specification/tests/test-runner-validation/`): Validate the test runner itself
 
 Run all tests:
 ```bash
@@ -160,6 +173,11 @@ cargo test
 Run conformance tests with output:
 ```bash
 cargo test test_conformance -- --nocapture
+```
+
+Run test runner validation:
+```bash
+cargo test test_runner_validation -- --nocapture
 ```
 
 ## Commands

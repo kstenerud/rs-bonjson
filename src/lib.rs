@@ -1,7 +1,7 @@
 // ABOUTME: serde_bonjson - A BONJSON (Binary Object Notation for JSON) encoder/decoder.
 // ABOUTME: Drop-in replacement for serde_json - just prepend "bon" to "json" in your imports.
 
-//! # serde_bonjson
+//! # `serde_bonjson`
 //!
 //! A drop-in replacement for [`serde_json`](https://docs.rs/serde_json) that's 2x faster
 //! and produces smaller payloads.
@@ -9,7 +9,7 @@
 //! BONJSON is a binary encoding that's 1:1 compatible with JSON's data model.
 //! If you're using `serde_json`, switching is a one-line change — just prepend "bon" to "json".
 //!
-//! ## Migrating from serde_json
+//! ## Migrating from `serde_json`
 //!
 //! ### Zero-Change Migration
 //!

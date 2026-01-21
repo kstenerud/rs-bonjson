@@ -1,6 +1,8 @@
 // ABOUTME: Defines BONJSON type codes and the BigNumber type.
 // ABOUTME: Type codes map directly to the BONJSON specification byte values.
 
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 /// Type codes for BONJSON values.
 /// These match the BONJSON specification exactly.
@@ -69,7 +71,7 @@ pub mod type_code {
         code <= SMALLINT_MAX
     }
 
-    /// Decode a small integer type code to its value (type_code - 100)
+    /// Decode a small integer type code to its value (`type_code` - 100)
     #[inline]
     #[must_use]
     pub const fn small_int_value(code: u8) -> i8 {
@@ -139,7 +141,7 @@ pub mod type_code {
     }
 
     /// Check if an integer type code is signed (bit 3 set).
-    /// Only valid when is_any_int() returns true.
+    /// Only valid when `is_any_int()` returns true.
     #[inline]
     #[must_use]
     pub const fn int_is_signed(code: u8) -> bool {
@@ -147,7 +149,7 @@ pub mod type_code {
     }
 
     /// Get the byte count for any integer type code (works for both signed and unsigned).
-    /// Only valid when is_any_int() returns true.
+    /// Only valid when `is_any_int()` returns true.
     #[inline]
     #[must_use]
     pub const fn int_size(code: u8) -> usize {

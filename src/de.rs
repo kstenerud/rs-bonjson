@@ -183,6 +183,7 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
                     return Err(Error::Custom("expected byte array".into()));
                 }
                 self.decoder.skip_byte();
+                #[allow(clippy::cast_sign_loss)]
                 bytes.push(val as u8);
             } else if tc == type_code::UINT8 {
                 // uint8 (values 101-255 need this encoding)

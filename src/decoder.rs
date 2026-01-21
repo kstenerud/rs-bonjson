@@ -1,6 +1,9 @@
 // ABOUTME: High-performance BONJSON binary decoder.
 // ABOUTME: Uses compiler intrinsics (trailing_zeros) for efficient length field decoding.
 
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
 
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber};
@@ -406,9 +409,8 @@ impl<'a> Decoder<'a> {
     fn is_at_container_end_internal(&mut self) -> Result<bool> {
         // First, check if we need to read the next chunk (avoiding borrow issues)
         let (remaining, has_continuation) = {
-            let container = match self.containers.last() {
-                Some(c) => c,
-                None => return Err(Error::UnbalancedContainers),
+            let Some(container) = self.containers.last() else {
+                return Err(Error::UnbalancedContainers);
             };
             (container.remaining, container.has_continuation)
         };
@@ -742,7 +744,7 @@ impl<'a> Decoder<'a> {
         Ok(Box::leak(owned))
     }
 
-    /// Decode a BigNumber.
+    /// Decode a `BigNumber`.
     fn decode_big_number(&mut self) -> Result<DecodedValue<'a>> {
         let header = self.read_byte()?;
 
@@ -802,7 +804,7 @@ impl<'a> Decoder<'a> {
     }
 
     /// Decode a length field.
-    /// Returns (length, continuation_bit).
+    /// Returns (length, `continuation_bit`).
     fn decode_length_field(&mut self) -> Result<(u64, bool)> {
         let header = self.read_byte()?;
 
