@@ -37,7 +37,15 @@ pub enum Error {
     /// Test spec: "unclosed_container"
     UnclosedContainer,
 
-    /// Generic invalid data (e.g., NaN in float, invalid BigNumber).
+    /// NaN value encountered where not allowed.
+    /// Test spec: "nan_not_allowed"
+    NanNotAllowed,
+
+    /// Infinity value encountered where not allowed.
+    /// Test spec: "infinity_not_allowed"
+    InfinityNotAllowed,
+
+    /// Generic invalid data (e.g., invalid BigNumber).
     /// Test spec: "invalid_data"
     InvalidData(String),
 
@@ -92,6 +100,8 @@ impl Error {
             Error::NulCharacter => "nul_character",
             Error::DuplicateKey => "duplicate_key",
             Error::UnclosedContainer => "unclosed_container",
+            Error::NanNotAllowed => "nan_not_allowed",
+            Error::InfinityNotAllowed => "infinity_not_allowed",
             Error::InvalidData(_) => "invalid_data",
             Error::InvalidObjectKey => "invalid_object_key",
             Error::ValueOutOfRange => "value_out_of_range",
@@ -118,6 +128,8 @@ impl fmt::Display for Error {
             Error::NulCharacter => write!(f, "NUL character in string"),
             Error::DuplicateKey => write!(f, "duplicate key in object"),
             Error::UnclosedContainer => write!(f, "unclosed container"),
+            Error::NanNotAllowed => write!(f, "NaN is not allowed"),
+            Error::InfinityNotAllowed => write!(f, "Infinity is not allowed"),
             Error::InvalidData(msg) => write!(f, "invalid data: {msg}"),
             Error::InvalidObjectKey => write!(f, "non-string object key"),
             Error::ValueOutOfRange => write!(f, "value out of range"),

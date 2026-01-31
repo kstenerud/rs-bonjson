@@ -134,7 +134,7 @@ with a single mask operation, then determines sign with `int_is_signed()`.
 
 ### Known Limitations
 - BigNumber significands limited to i64 range
-- NaN/Infinity stringify mode not implemented
+- NaN/Infinity stringify mode not implemented (but NaN/Infinity rejection uses spec-compliant `nan_not_allowed` / `infinity_not_allowed` error types)
 - Invalid UTF-8 replace/delete modes not implemented
 
 ### Performance Considerations

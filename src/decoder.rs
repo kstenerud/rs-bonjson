@@ -432,8 +432,7 @@ impl<'a> Decoder<'a> {
     #[inline]
     fn read_signed_int_sized(&mut self, size: usize) -> Result<i64> {
         let bytes = self.read_bytes(size)?;
-        let sign_bit = (bytes[size - 1] >> 7) & 1;
-        let fill: u8 = if sign_bit == 1 { 0xff } else { 0x00 };
+        let fill = ((bytes[size - 1] as i8) >> 7) as u8;
         let mut buf = [fill; 8];
         buf[..size].copy_from_slice(bytes);
         Ok(i64::from_le_bytes(buf))
@@ -452,9 +451,7 @@ impl<'a> Decoder<'a> {
     #[inline]
     fn read_float64(&mut self) -> Result<f64> {
         let bytes = self.read_bytes(8)?;
-        let mut buf = [0u8; 8];
-        buf.copy_from_slice(bytes);
-        let value = f64::from_le_bytes(buf);
+        let value = f64::from_le_bytes(bytes.try_into().unwrap());
         self.check_float(value)?;
         Ok(value)
     }
@@ -462,8 +459,13 @@ impl<'a> Decoder<'a> {
     /// Check if a float value is allowed.
     #[inline]
     fn check_float(&self, value: f64) -> Result<()> {
-        if !self.config.allow_nan_infinity && (value.is_nan() || value.is_infinite()) {
-            return Err(Error::InvalidData("NaN or Infinity not allowed".into()));
+        if !self.config.allow_nan_infinity {
+            if value.is_nan() {
+                return Err(Error::NanNotAllowed);
+            }
+            if value.is_infinite() {
+                return Err(Error::InfinityNotAllowed);
+            }
         }
         Ok(())
     }
@@ -477,7 +479,7 @@ impl<'a> Decoder<'a> {
         let bytes = self.read_bytes(len)?;
         let s = validate_utf8(bytes)?;
 
-        if !self.config.allow_nul && bytes.contains(&0) {
+        if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
             return Err(Error::NulCharacter);
         }
 

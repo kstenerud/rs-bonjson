@@ -112,8 +112,11 @@ impl<W: Write> Encoder<W> {
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn write_f64_unchecked(&mut self, value: f64) -> Result<()> {
-        if value.is_nan() || value.is_infinite() {
-            return Err(Error::InvalidData("NaN and Infinity are not allowed".into()));
+        if value.is_nan() {
+            return Err(Error::NanNotAllowed);
+        }
+        if value.is_infinite() {
+            return Err(Error::InfinityNotAllowed);
         }
 
         // Negative zero must be encoded as float
@@ -234,8 +237,11 @@ impl<W: Write> Encoder<W> {
             return Err(Error::ExpectedObjectKey);
         }
 
-        if value.is_nan() || value.is_infinite() {
-            return Err(Error::InvalidData("NaN and Infinity are not allowed".into()));
+        if value.is_nan() {
+            return Err(Error::NanNotAllowed);
+        }
+        if value.is_infinite() {
+            return Err(Error::InfinityNotAllowed);
         }
 
         // Negative zero must be encoded as float
@@ -432,15 +438,17 @@ impl<W: Write> Encoder<W> {
         let f32_val = value as f32;
         #[allow(clippy::float_cmp)]
         if f64::from(f32_val) == value {
-            self.write_byte(type_code::FLOAT32)?;
-            let bytes = f32_val.to_le_bytes();
-            return self.write_bytes(&bytes);
+            let mut buf = [0u8; 5];
+            buf[0] = type_code::FLOAT32;
+            buf[1..5].copy_from_slice(&f32_val.to_le_bytes());
+            return self.write_bytes(&buf);
         }
 
         // Use f64
-        self.write_byte(type_code::FLOAT64)?;
-        let bytes = value.to_le_bytes();
-        self.write_bytes(&bytes)
+        let mut buf = [0u8; 9];
+        buf[0] = type_code::FLOAT64;
+        buf[1..9].copy_from_slice(&value.to_le_bytes());
+        self.write_bytes(&buf)
     }
 }
 
@@ -482,7 +490,7 @@ fn required_signed_bytes_min1(value: i64) -> usize {
 
 /// Encode a value to a byte vector.
 pub fn to_vec<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(128);
     let mut encoder = Encoder::new(&mut buf);
     value.serialize(&mut crate::ser::Serializer::new(&mut encoder))?;
     encoder.finish()?;
