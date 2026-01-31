@@ -107,8 +107,9 @@ The project uses a layered architecture:
 ### Performance Optimizations
 
 #### Encoder (ser.rs, encoder.rs)
-- Pre-allocates output buffer based on input estimate
+- `to_vec()` pre-allocates 128 bytes to reduce reallocations for small-to-medium payloads
 - Uses unchecked write methods for serde path (bounds already validated)
+- Combined type code + payload write for floats (single `write_all` call)
 - Inline hints on hot paths
 
 #### Decoder (de.rs, decoder.rs)
@@ -116,6 +117,8 @@ The project uses a layered architecture:
 - Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum
 - `try_consume_container_end()` checks for 0xFE delimiter and pops container state
 - Serde path uses unchecked methods that skip container state tracking
+- Branchless sign extension for signed integer decoding (arithmetic right shift)
+- Uses `memchr` for NUL byte detection in both short and long strings
 - Inline hints on hot paths
 
 #### Type Code Dispatch (types.rs)
