@@ -485,30 +485,28 @@ impl<'a> Decoder<'a> {
     }
 
     /// Decode long string content (FF-terminated: read until next 0xFF).
+    /// Uses memchr for SIMD-accelerated scanning of the terminator byte.
     fn decode_long_string_content(&mut self) -> Result<&'a str> {
         let start = self.pos;
+        let remaining = &self.data[start..];
 
-        // Scan for the terminating 0xFF byte
-        while self.pos < self.data.len() {
-            if self.data[self.pos] == 0xff {
-                let end = self.pos;
-                self.pos += 1; // consume the terminator
+        if let Some(offset) = memchr::memchr(0xFF, remaining) {
+            let end = start + offset;
+            self.pos = end + 1; // consume the terminator
 
-                let len = end - start;
-                if len > self.config.max_string_length {
-                    return Err(Error::MaxStringLengthExceeded);
-                }
-
-                let bytes = &self.data[start..end];
-                let s = validate_utf8(bytes)?;
-
-                if !self.config.allow_nul && bytes.contains(&0) {
-                    return Err(Error::NulCharacter);
-                }
-
-                return Ok(s);
+            let len = offset;
+            if len > self.config.max_string_length {
+                return Err(Error::MaxStringLengthExceeded);
             }
-            self.pos += 1;
+
+            let bytes = &self.data[start..end];
+            let s = validate_utf8(bytes)?;
+
+            if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
+                return Err(Error::NulCharacter);
+            }
+
+            return Ok(s);
         }
 
         Err(Error::Truncated)
