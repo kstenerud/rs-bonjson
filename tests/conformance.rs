@@ -17,7 +17,6 @@ const KNOWN_OPTIONS: &[&str] = &[
     "max_depth",
     "max_container_size",
     "max_string_length",
-    "max_chunks",
     "max_document_size",
     "duplicate_key",
     "nan_infinity_behavior",
@@ -31,12 +30,14 @@ const KNOWN_ERROR_TYPES: &[&str] = &[
     "invalid_type_code",
     "invalid_utf8",
     "nul_character",
+    "nul_in_string",
     "duplicate_key",
     "unclosed_container",
     "invalid_data",
+    "invalid_object_key",
     "value_out_of_range",
-    "too_many_chunks",
-    "empty_chunk_continuation",
+    "nan_not_allowed",
+    "infinity_not_allowed",
     "max_depth_exceeded",
     "max_string_length_exceeded",
     "max_container_size_exceeded",
@@ -495,7 +496,7 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
                         )));
                     }
                 }
-                "max_depth" | "max_container_size" | "max_string_length" | "max_chunks"
+                "max_depth" | "max_container_size" | "max_string_length"
                 | "max_document_size" => {
                     if let Some(n) = value.as_i64() {
                         if n < 0 {
@@ -806,9 +807,6 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         }
         if let Some(max_len) = options.get("max_string_length").and_then(|v| v.as_u64()) {
             config.max_string_length = max_len as usize;
-        }
-        if let Some(max_chunks) = options.get("max_chunks").and_then(|v| v.as_u64()) {
-            config.max_chunks = max_chunks as usize;
         }
         if let Some(max_doc) = options.get("max_document_size").and_then(|v| v.as_u64()) {
             config.max_document_size = max_doc as usize;

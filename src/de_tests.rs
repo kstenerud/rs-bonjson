@@ -6,42 +6,37 @@ use serde::Deserialize;
 
 #[test]
 fn test_deserialize_primitives() {
-    // true: 0xf7, false: 0xf6
-    assert!(from_slice::<bool>(&[0xf7]).unwrap());
-    assert!(!from_slice::<bool>(&[0xf6]).unwrap());
+    // true: 0xcf, false: 0xce
+    assert!(from_slice::<bool>(&[0xcf]).unwrap());
+    assert!(!from_slice::<bool>(&[0xce]).unwrap());
     // 42 as small int: 42 + 100 = 142 = 0x8e
     assert_eq!(from_slice::<i32>(&[0x8e]).unwrap(), 42);
-    // "hello" (5 chars): 0xe5 + bytes
+    // "hello" (5 chars): 0xd5 + bytes
     assert_eq!(
-        from_slice::<String>(&[0xe5, b'h', b'e', b'l', b'l', b'o']).unwrap(),
+        from_slice::<String>(&[0xd5, b'h', b'e', b'l', b'l', b'o']).unwrap(),
         "hello"
     );
 }
 
 #[test]
 fn test_deserialize_option() {
-    // null: 0xf5
-    assert_eq!(from_slice::<Option<i32>>(&[0xf5]).unwrap(), None);
+    // null: 0xcd
+    assert_eq!(from_slice::<Option<i32>>(&[0xcd]).unwrap(), None);
     // 42 as small int: 0x8e
     assert_eq!(from_slice::<Option<i32>>(&[0x8e]).unwrap(), Some(42));
 }
 
 /// Test null values inside containers (regression test for container state tracking).
-/// When deserializing Option::None inside a container, the container's element count
-/// must be decremented properly.
 #[test]
 fn test_null_in_containers() {
-    // Array of None values: [None, None]
     let nulls: Vec<Option<i32>> = vec![None, None];
     let bytes = crate::to_vec(&nulls).unwrap();
     assert_eq!(from_slice::<Vec<Option<i32>>>(&bytes).unwrap(), nulls);
 
-    // Array with mixed Some/None
     let mixed: Vec<Option<i32>> = vec![Some(1), None, Some(2), None];
     let bytes = crate::to_vec(&mixed).unwrap();
     assert_eq!(from_slice::<Vec<Option<i32>>>(&bytes).unwrap(), mixed);
 
-    // Struct with Option fields containing None
     #[derive(Debug, serde::Serialize, Deserialize, PartialEq)]
     struct Data {
         a: String,
@@ -55,7 +50,6 @@ fn test_null_in_containers() {
     let bytes = crate::to_vec(&data).unwrap();
     assert_eq!(from_slice::<Vec<Data>>(&bytes).unwrap(), data);
 
-    // Nested containers with nulls
     let nested: Vec<Vec<Option<i32>>> = vec![vec![None, None], vec![None]];
     let bytes = crate::to_vec(&nested).unwrap();
     assert_eq!(from_slice::<Vec<Vec<Option<i32>>>>(&bytes).unwrap(), nested);
@@ -63,9 +57,9 @@ fn test_null_in_containers() {
 
 #[test]
 fn test_deserialize_vec() {
-    // [1, 2, 3]: array 0xf8 + chunk(count=3) 0x0c + elements 0x65 0x66 0x67
+    // [1, 2, 3]: FC + elements + FE
     assert_eq!(
-        from_slice::<Vec<i32>>(&[0xf8, 0x0c, 0x65, 0x66, 0x67]).unwrap(),
+        from_slice::<Vec<i32>>(&[0xfc, 0x65, 0x66, 0x67, 0xfe]).unwrap(),
         vec![1, 2, 3]
     );
 }
@@ -78,8 +72,8 @@ fn test_deserialize_struct() {
         y: i32,
     }
 
-    // {"x": 1, "y": 2}: object 0xf9 + chunk(count=2) 0x08 + "x" + 1 + "y" + 2
-    let bytes = vec![0xf9, 0x08, 0xe1, b'x', 0x65, 0xe1, b'y', 0x66];
+    // {"x": 1, "y": 2}: FD + "x" + 1 + "y" + 2 + FE
+    let bytes = vec![0xfd, 0xd1, b'x', 0x65, 0xd1, b'y', 0x66, 0xfe];
     assert_eq!(from_slice::<Point>(&bytes).unwrap(), Point { x: 1, y: 2 });
 }
 
@@ -92,8 +86,8 @@ fn test_deserialize_enum() {
         Blue,
     }
 
-    // "Red" (3 chars): 0xe3 + bytes
-    let bytes = vec![0xe3, b'R', b'e', b'd'];
+    // "Red" (3 chars): 0xd3 + bytes
+    let bytes = vec![0xd3, b'R', b'e', b'd'];
     assert_eq!(from_slice::<Color>(&bytes).unwrap(), Color::Red);
 }
 
@@ -109,7 +103,6 @@ fn test_serde_rename() {
         first_name: String,
     }
 
-    // {"firstName": "Alice"}
     let bytes = crate::to_vec(&serde_json::json!({"firstName": "Alice"})).unwrap();
     let result: Data = from_slice(&bytes).unwrap();
     assert_eq!(result.first_name, "Alice");
@@ -142,11 +135,10 @@ fn test_serde_default() {
         count: i32,
     }
 
-    // {"name": "test"} - missing count field
     let bytes = crate::to_vec(&serde_json::json!({"name": "test"})).unwrap();
     let result: Config = from_slice(&bytes).unwrap();
     assert_eq!(result.name, "test");
-    assert_eq!(result.count, 0); // default value
+    assert_eq!(result.count, 0);
 }
 
 #[test]
@@ -174,11 +166,10 @@ fn test_serde_skip_deserializing() {
         skipped: i32,
     }
 
-    // Even if skipped is in the data, it should use default
     let bytes = crate::to_vec(&serde_json::json!({"name": "test", "skipped": 99})).unwrap();
     let result: Data = from_slice(&bytes).unwrap();
     assert_eq!(result.name, "test");
-    assert_eq!(result.skipped, 0); // default, not 99
+    assert_eq!(result.skipped, 0);
 }
 
 #[test]
@@ -189,7 +180,6 @@ fn test_serde_alias() {
         name: String,
     }
 
-    // Using alias "nm" instead of "name"
     let bytes = crate::to_vec(&serde_json::json!({"nm": "Alice"})).unwrap();
     let result: Data = from_slice(&bytes).unwrap();
     assert_eq!(result.name, "Alice");
@@ -210,7 +200,6 @@ fn test_serde_flatten() {
         inner: Inner,
     }
 
-    // Flattened: {"name": "point", "x": 1, "y": 2}
     let bytes = crate::to_vec(&serde_json::json!({
         "name": "point",
         "x": 1,
@@ -246,18 +235,12 @@ fn test_enum_newtype_variant() {
         Text(String),
     }
 
-    // {"Int": 42}
     let bytes = crate::to_vec(&serde_json::json!({"Int": 42})).unwrap();
     assert_eq!(from_slice::<Value>(&bytes).unwrap(), Value::Int(42));
 
-    // {"Text": "hello"}
     let bytes = crate::to_vec(&serde_json::json!({"Text": "hello"})).unwrap();
     assert_eq!(from_slice::<Value>(&bytes).unwrap(), Value::Text("hello".to_string()));
 }
-
-// Note: Tuple variants have a known issue with roundtrip deserialization.
-// The encoding is correct ({variant: [values...]}) but deserialization
-// has a trailing bytes error. This needs further investigation.
 
 #[test]
 fn test_enum_struct_variant() {
@@ -267,11 +250,9 @@ fn test_enum_struct_variant() {
         Rectangle { width: f64, height: f64 },
     }
 
-    // {"Circle": {"radius": 5.0}}
     let bytes = crate::to_vec(&serde_json::json!({"Circle": {"radius": 5.0}})).unwrap();
     assert_eq!(from_slice::<Shape>(&bytes).unwrap(), Shape::Circle { radius: 5.0 });
 
-    // {"Rectangle": {"width": 10.0, "height": 20.0}}
     let bytes = crate::to_vec(&serde_json::json!({"Rectangle": {"width": 10.0, "height": 20.0}})).unwrap();
     assert_eq!(from_slice::<Shape>(&bytes).unwrap(), Shape::Rectangle { width: 10.0, height: 20.0 });
 }
@@ -282,14 +263,9 @@ fn test_enum_struct_variant() {
 
 #[test]
 fn test_nested_option() {
-    // Option<Option<i32>>
-    // Note: serde serializes Some(None) as null, which deserializes to None.
-    // This is expected serde behavior - Some(None) and None both become null.
-
     let bytes = crate::to_vec(&Some(Some(42))).unwrap();
     assert_eq!(from_slice::<Option<Option<i32>>>(&bytes).unwrap(), Some(Some(42)));
 
-    // Both Some(None) and None serialize to null and deserialize to None
     let bytes = crate::to_vec(&None::<Option<i32>>).unwrap();
     assert_eq!(from_slice::<Option<Option<i32>>>(&bytes).unwrap(), None);
 }
@@ -337,8 +313,8 @@ fn test_complex_nested_structure() {
 fn test_from_slice_with_config_allow_nul() {
     use crate::decoder::DecoderConfig;
 
-    // String containing NUL: "a\0b" (3 chars): 0xe3 + bytes
-    let bytes = vec![0xe3, b'a', 0x00, b'b'];
+    // String containing NUL: "a\0b" (3 chars): 0xd3 + bytes
+    let bytes = vec![0xd3, b'a', 0x00, b'b'];
 
     // Default config should fail
     assert!(from_slice::<String>(&bytes).is_err());

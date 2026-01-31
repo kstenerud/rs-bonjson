@@ -5,20 +5,17 @@ use crate::types::{type_code, BigNumber};
 
 #[test]
 fn test_small_int_codes() {
-    // Small integers: 0x00-0xc8 (values -100 to 100, type_code = value + 100)
     assert!(type_code::is_small_int(0x00)); // -100
     assert!(type_code::is_small_int(0x64)); // 0
     assert!(type_code::is_small_int(0xc8)); // 100
     assert!(!type_code::is_small_int(0xc9)); // Reserved
 
-    // small_int_value: type_code - 100
     assert_eq!(type_code::small_int_value(0x00), -100);
     assert_eq!(type_code::small_int_value(0x63), -1);
     assert_eq!(type_code::small_int_value(0x64), 0);
     assert_eq!(type_code::small_int_value(0x65), 1);
     assert_eq!(type_code::small_int_value(0xc8), 100);
 
-    // small_int_code: value + 100
     assert_eq!(type_code::small_int_code(-100), 0x00);
     assert_eq!(type_code::small_int_code(-1), 0x63);
     assert_eq!(type_code::small_int_code(0), 0x64);
@@ -28,14 +25,14 @@ fn test_small_int_codes() {
 
 #[test]
 fn test_short_string_codes() {
-    // Short strings: 0xe0-0xef
-    assert!(type_code::is_short_string(0xe0));
-    assert!(type_code::is_short_string(0xef));
-    assert!(!type_code::is_short_string(0xdf));
-    assert!(!type_code::is_short_string(0xf0));
+    // Short strings: 0xd0-0xdf
+    assert!(type_code::is_short_string(0xd0));
+    assert!(type_code::is_short_string(0xdf));
+    assert!(!type_code::is_short_string(0xcf));
+    assert!(!type_code::is_short_string(0xe0));
 
-    assert_eq!(type_code::short_string_len(0xe0), 0);
-    assert_eq!(type_code::short_string_len(0xef), 15);
+    assert_eq!(type_code::short_string_len(0xd0), 0);
+    assert_eq!(type_code::short_string_len(0xdf), 15);
 }
 
 #[test]

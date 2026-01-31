@@ -33,14 +33,6 @@ impl<'de> Deserializer<'de> {
 }
 
 /// Deserialize a value from a BONJSON byte slice.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The document exceeds size limits
-/// - The data is malformed or truncated
-/// - The data doesn't match the expected type `T`
-/// - There are trailing bytes after the value
 pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
     let mut de = Deserializer::from_slice(data);
     de.decoder.check_document_size()?;
@@ -50,14 +42,6 @@ pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
 }
 
 /// Deserialize a value from a BONJSON byte slice with custom configuration.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The document exceeds configured limits
-/// - The data is malformed or truncated
-/// - The data doesn't match the expected type `T`
-/// - There are trailing bytes (unless `allow_trailing_bytes` is set)
 pub fn from_slice_with_config<'de, T: Deserialize<'de>>(
     data: &'de [u8],
     config: DecoderConfig,
@@ -80,7 +64,6 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
             DecodedValue::UInt(n) => visitor.visit_u64(n),
             DecodedValue::Float(f) => visitor.visit_f64(f),
             DecodedValue::BigNumber(bn) => {
-                // Try to convert to a native type
                 if let Some(i) = bn.to_i64() {
                     visitor.visit_i64(i)
                 } else if let Some(u) = bn.to_u64() {
@@ -103,7 +86,6 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        // Use direct decode to skip DecodedValue intermediate
         visitor.visit_bool(self.decoder.decode_bool_direct()?)
     }
 
@@ -167,16 +149,13 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         use crate::types::type_code;
 
-        // Expect array start
         self.decoder.expect_array_start()?;
         let mut bytes = Vec::new();
         loop {
             if self.decoder.try_consume_container_end()? {
                 break;
             }
-            // Each element should be an integer 0-255
             let tc = self.decoder.peek_type_code()?;
-            // Small ints: tc 0x64-0xc8 → values 0-100
             if type_code::is_small_int(tc) {
                 let val = type_code::small_int_value(tc);
                 if val < 0 {
@@ -186,7 +165,6 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
                 #[allow(clippy::cast_sign_loss)]
                 bytes.push(val as u8);
             } else if tc == type_code::UINT8 {
-                // uint8 (values 101-255 need this encoding)
                 self.decoder.skip_byte();
                 let b = self.decoder.read_byte_unchecked();
                 bytes.push(b);
@@ -202,10 +180,8 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        // Use peek_type_code to check for null without full decode
         if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
-            self.decoder.skip_byte(); // consume the null type code
-            self.decoder.consume_element(); // update container state
+            self.decoder.skip_byte();
             visitor.visit_none()
         } else {
             visitor.visit_some(self)
@@ -213,10 +189,8 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        // Expect null type code directly
         if self.decoder.peek_type_code()? == crate::types::type_code::NULL {
-            self.decoder.skip_byte(); // consume the null type code
-            self.decoder.consume_element(); // update container state
+            self.decoder.skip_byte();
             visitor.visit_unit()
         } else {
             Err(Error::Custom("expected null".into()))
@@ -287,12 +261,9 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     ) -> Result<V::Value> {
         use crate::types::type_code;
         let tc = self.decoder.peek_type_code()?;
-        // Check if it's a string (short: 0xe0-0xef, long: 0xf0)
-        if type_code::is_short_string(tc) || tc == type_code::STRING_LONG {
-            // Unit variant: just a string
+        if type_code::is_any_string(tc) {
             visitor.visit_enum(UnitVariantDeserializer::new(self))
         } else if tc == type_code::OBJECT {
-            // Other variants: object with single key
             self.decoder.expect_object_start()?;
             visitor.visit_enum(EnumDeserializer::new(self))
         } else {
@@ -301,7 +272,6 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_identifier<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
-        // Field names are always strings - use direct decode
         visitor.visit_borrowed_str(self.decoder.decode_str_direct()?)
     }
 
@@ -327,7 +297,6 @@ impl<'de> SeqAccess<'de> for SeqDeserializer<'_, 'de> {
         &mut self,
         seed: T,
     ) -> Result<Option<T::Value>> {
-        // Single check+consume operation
         if self.de.decoder.try_consume_container_end()? {
             return Ok(None);
         }
@@ -349,7 +318,6 @@ impl<'de> MapAccess<'de> for MapDeserializer<'_, 'de> {
     type Error = Error;
 
     fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
-        // Single check+consume operation
         if self.de.decoder.try_consume_container_end()? {
             return Ok(None);
         }
@@ -434,9 +402,8 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
 
     fn newtype_variant_seed<T: DeserializeSeed<'de>>(self, seed: T) -> Result<T::Value> {
         let value = seed.deserialize(&mut *self.de)?;
-        // With chunked containers, the outer object ends naturally after the single key-value pair
-        // Pop the container state
-        self.de.decoder.end_container()?;
+        // Consume the outer object's end marker
+        self.de.decoder.try_consume_container_end()?;
         Ok(value)
     }
 
@@ -444,9 +411,8 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
         self.de.decoder.expect_array_start()?;
         let seq = SeqDeserializer::new(self.de);
         let value = visitor.visit_seq(seq)?;
-        // With chunked containers, the outer object ends naturally after the single key-value pair
-        // Pop the container state
-        self.de.decoder.end_container()?;
+        // Consume the outer object's end marker
+        self.de.decoder.try_consume_container_end()?;
         Ok(value)
     }
 
@@ -458,9 +424,8 @@ impl<'de> de::VariantAccess<'de> for EnumDeserializer<'_, 'de> {
         self.de.decoder.expect_object_start()?;
         let map = MapDeserializer::new(self.de);
         let value = visitor.visit_map(map)?;
-        // With chunked containers, the outer object ends naturally after the single key-value pair
-        // Pop the container state
-        self.de.decoder.end_container()?;
+        // Consume the outer object's end marker
+        self.de.decoder.try_consume_container_end()?;
         Ok(value)
     }
 }

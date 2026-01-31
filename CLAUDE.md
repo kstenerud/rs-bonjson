@@ -33,9 +33,10 @@ The project uses a layered architecture:
 ## Source Files
 
 ### types.rs
-- Type codes (0x00-0xff) as defined by the BONJSON spec
+- Type codes as defined by the BONJSON spec
 - `BigNumber` struct for arbitrary precision decimals (significand × 10^exponent)
 - Helper functions for encoding/decoding type codes using mask-based dispatch
+- Zigzag and LEB128 encoding/decoding helpers for BigNumber
 - Resource limits (max depth, max container size, etc.)
 
 ### error.rs
@@ -45,20 +46,19 @@ The project uses a layered architecture:
 
 ### encoder.rs
 - `Encoder<W: Write>` - streaming binary encoder
-- Uses compiler intrinsics (`trailing_zeros()`) for efficient length field encoding
-- Supports all BONJSON types including bfloat16, float32, float64
+- Supports all BONJSON types: small ints, sized ints (u8-u64, i8-i64), float32, float64, BigNumber
 - Automatically chooses smallest encoding for integers and floats
 - Validates floats (rejects NaN/Infinity by default)
-- Key optimization: length fields use trailing-1-bits encoding for compactness
+- Delimiter-terminated containers (FC/FD start, FE end)
+- FF-terminated long strings (FF + payload + FF)
 
 ### decoder.rs
 - `Decoder<'a>` - zero-copy decoder that borrows from input slice
 - `DecoderConfig` for configurable limits and options
 - `DuplicateKeyMode` - Error, KeepFirst, or KeepLast
-- Uses compiler intrinsics (`trailing_zeros()`) for efficient length field decoding
-- Validates UTF-8 on complete assembled strings (multi-chunk strings are concatenated first)
 - Optional SIMD-accelerated UTF-8 validation via `simd-utf8` feature
 - Returns `DecodedValue<'a>` enum for streaming access
+- Direct decode methods for serde path avoid `DecodedValue` intermediary
 
 ### value.rs
 - `Value` enum - dynamic value type similar to `serde_json::Value`
@@ -79,38 +79,53 @@ The project uses a layered architecture:
 ### lib.rs
 - Public API functions: `to_vec`, `to_writer`, `from_slice`, `from_slice_with_config`
 - Value-based API: `encode_value`, `decode_value`, `decode_value_with_config`
-- Recursive value decoding with duplicate key detection
+- Recursive value decoding with duplicate key detection and container size limits
 - Re-exports commonly used types
 
 ## Key Design Decisions
 
+### Type Code Layout
+| Range | Meaning |
+|-------|---------|
+| 00–C8 | Small integers (-100 to 100), value = code - 100 |
+| C9 | Reserved |
+| CA | BigNumber (zigzag LEB128 exponent + significand) |
+| CB | float32 (IEEE 754, little-endian) |
+| CC | float64 (IEEE 754, little-endian) |
+| CD | null |
+| CE | false |
+| CF | true |
+| D0–DF | Short string (0–15 bytes, length = code & 0x0F) |
+| E0–E3 | Unsigned integers (uint8, uint16, uint32, uint64) |
+| E4–E7 | Signed integers (int8, int16, int32, int64) |
+| E8–FB | Reserved |
+| FC | Array start |
+| FD | Object start |
+| FE | Container end |
+| FF | Long string start/terminator |
+
 ### Performance Optimizations
 
 #### Encoder (ser.rs, encoder.rs)
-- Length field encoding uses trailing-1-bits pattern, encoded with `trailing_zeros()` intrinsic
-- bfloat16 used when float values can be exactly represented in fewer bytes
 - Pre-allocates output buffer based on input estimate
 - Uses unchecked write methods for serde path (bounds already validated)
 - Inline hints on hot paths
 
 #### Decoder (de.rs, decoder.rs)
-- Zero-copy string decoding for single-chunk strings
-- Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum - avoids intermediate allocation and match overhead
-- `try_consume_container_end()` checks if current chunk is exhausted with no continuation, pops container state if so
-- Length field decoding uses `trailing_zeros()` intrinsic
+- Zero-copy string decoding for single-segment strings
+- Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum
+- `try_consume_container_end()` checks for 0xFE delimiter and pops container state
 - Serde path uses unchecked methods that skip container state tracking
 - Inline hints on hot paths
 
 #### Type Code Dispatch (types.rs)
-The BONJSON type code layout enables efficient mask-based dispatch:
+The type code layout enables efficient mask-based dispatch:
 - `0x00-0xc8`: Small integers (value = code - 100)
-- `0xd0-0xdf`: Integers - `(code & 0xf0) == 0xd0`, sign bit at `(code & 0x08)`, size from `(code & 0x07) + 1`
-- `0xe0-0xef`: Short strings - `(code & 0xf0) == 0xe0`, length from `(code & 0x0f)`
-- `0xf0-0xf9`: Other types (long string, floats, null, bool, containers)
+- `0xd0-0xdf`: Short strings — `(code & 0xf0) == 0xd0`, length from `(code & 0x0f)`
+- `0xe0-0xe7`: Integers — `(code & 0xf8) == 0xe0`, sign bit at `(code & 0x04)`, size index from `(code & 0x03)`
 
 Key optimization: Combined integer check `is_any_int()` tests all integers (signed and unsigned)
-with a single mask operation, then determines sign with `int_is_signed()`. This is ~42% faster
-for type dispatch than separate unsigned/signed checks. See `examples/type_dispatch_bench.rs`.
+with a single mask operation, then determines sign with `int_is_signed()`.
 
 ### Compliance Levels
 - **Basic compliance**: UTF-8 validation, NUL character rejection, duplicate key detection (byte-for-byte comparison)
@@ -118,11 +133,7 @@ for type dispatch than separate unsigned/signed checks. See `examples/type_dispa
 - Optional features: NaN/Infinity handling, duplicate key keep_first/keep_last modes
 
 ### Known Limitations
-- BigNumber significands limited to 8 bytes (u64)
-- Multi-chunk strings use `Box::leak` to return borrowed references from owned data.
-  This only affects strings from external BONJSON sources that use chunking for streaming;
-  the encoder in this crate always produces single-chunk strings, so in a closed system
-  this code path is never executed.
+- BigNumber significands limited to i64 range
 - NaN/Infinity stringify mode not implemented
 - Invalid UTF-8 replace/delete modes not implemented
 

@@ -14,59 +14,55 @@ pub enum Error {
     Truncated,
 
     /// Unconsumed bytes after decoding a complete document.
-    /// Test spec: "`trailing_bytes`"
+    /// Test spec: "trailing_bytes"
     TrailingBytes,
 
     /// Unrecognized or reserved type code encountered.
-    /// Test spec: "`invalid_type_code`"
+    /// Test spec: "invalid_type_code"
     InvalidTypeCode(u8),
 
     /// Invalid UTF-8 byte sequence in string.
-    /// Test spec: "`invalid_utf8`"
+    /// Test spec: "invalid_utf8"
     InvalidUtf8,
 
     /// NUL (0x00) byte in string (rejected by default).
-    /// Test spec: "`nul_character`"
+    /// Test spec: "nul_character"
     NulCharacter,
 
     /// Duplicate key in object.
-    /// Test spec: "`duplicate_key`"
+    /// Test spec: "duplicate_key"
     DuplicateKey,
 
     /// Missing container end marker.
-    /// Test spec: "`unclosed_container`"
+    /// Test spec: "unclosed_container"
     UnclosedContainer,
 
-    /// Generic invalid data (e.g., NaN in float, invalid `BigNumber`).
-    /// Test spec: "`invalid_data`"
+    /// Generic invalid data (e.g., NaN in float, invalid BigNumber).
+    /// Test spec: "invalid_data"
     InvalidData(String),
 
+    /// Non-string used as object key.
+    /// Test spec: "invalid_object_key"
+    InvalidObjectKey,
+
     /// Value exceeds allowed range.
-    /// Test spec: "`value_out_of_range`"
+    /// Test spec: "value_out_of_range"
     ValueOutOfRange,
 
-    /// String exceeds chunk count limit.
-    /// Test spec: "`too_many_chunks`"
-    TooManyChunks,
-
-    /// Zero-length chunk with continuation bit set.
-    /// Test spec: "`empty_chunk_continuation`"
-    EmptyChunkContinuation,
-
     /// Container nesting too deep.
-    /// Test spec: "`max_depth_exceeded`"
+    /// Test spec: "max_depth_exceeded"
     MaxDepthExceeded,
 
     /// String exceeds length limit.
-    /// Test spec: "`max_string_length_exceeded`"
+    /// Test spec: "max_string_length_exceeded"
     MaxStringLengthExceeded,
 
     /// Container has too many elements.
-    /// Test spec: "`max_container_size_exceeded`"
+    /// Test spec: "max_container_size_exceeded"
     MaxContainerSizeExceeded,
 
     /// Document exceeds size limit.
-    /// Test spec: "`max_document_size_exceeded`"
+    /// Test spec: "max_document_size_exceeded"
     MaxDocumentSizeExceeded,
 
     /// Tried to close more containers than were opened.
@@ -97,9 +93,8 @@ impl Error {
             Error::DuplicateKey => "duplicate_key",
             Error::UnclosedContainer => "unclosed_container",
             Error::InvalidData(_) => "invalid_data",
+            Error::InvalidObjectKey => "invalid_object_key",
             Error::ValueOutOfRange => "value_out_of_range",
-            Error::TooManyChunks => "too_many_chunks",
-            Error::EmptyChunkContinuation => "empty_chunk_continuation",
             Error::MaxDepthExceeded => "max_depth_exceeded",
             Error::MaxStringLengthExceeded => "max_string_length_exceeded",
             Error::MaxContainerSizeExceeded => "max_container_size_exceeded",
@@ -124,11 +119,8 @@ impl fmt::Display for Error {
             Error::DuplicateKey => write!(f, "duplicate key in object"),
             Error::UnclosedContainer => write!(f, "unclosed container"),
             Error::InvalidData(msg) => write!(f, "invalid data: {msg}"),
+            Error::InvalidObjectKey => write!(f, "non-string object key"),
             Error::ValueOutOfRange => write!(f, "value out of range"),
-            Error::TooManyChunks => write!(f, "too many string chunks"),
-            Error::EmptyChunkContinuation => {
-                write!(f, "empty chunk with continuation bit")
-            }
             Error::MaxDepthExceeded => write!(f, "maximum container depth exceeded"),
             Error::MaxStringLengthExceeded => write!(f, "maximum string length exceeded"),
             Error::MaxContainerSizeExceeded => write!(f, "maximum container size exceeded"),

@@ -112,7 +112,6 @@
 //! - Maximum nesting depth: 512
 //! - Maximum container size: 1,000,000 elements
 //! - Maximum string length: 10 MB
-//! - Maximum chunks per string: 100
 //!
 //! ## Optional Features
 //!
@@ -379,8 +378,8 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
 /// ```rust
 /// use serde_bonjson::{decode_value, Value};
 ///
-/// // [1, 2, 3]: array type (0xf8) + chunk header (count=3, cont=0 → 0x0c) + elements
-/// let bytes = vec![0xf8, 0x0c, 0x65, 0x66, 0x67];
+/// // [1, 2, 3]: array start (0xfc) + elements + end marker (0xfe)
+/// let bytes = vec![0xfc, 0x65, 0x66, 0x67, 0xfe];
 /// let value = decode_value(&bytes).unwrap();
 /// assert!(value.is_array());
 /// ```
@@ -427,8 +426,12 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
         DecodedValue::BigNumber(bn) => Ok(Value::BigNumber(bn)),
         DecodedValue::String(s) => Ok(Value::String(s.to_owned())),
         DecodedValue::ArrayStart => {
+            let max_size = decoder.config().max_container_size;
             let mut arr = Vec::new();
             while !decoder.is_at_container_end()? {
+                if arr.len() >= max_size {
+                    return Err(Error::MaxContainerSizeExceeded);
+                }
                 arr.push(decode_value_recursive(decoder)?);
             }
             decoder.end_container()?;
@@ -436,8 +439,13 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
         }
         DecodedValue::ObjectStart => {
             let dup_mode = decoder.config().duplicate_key_mode;
+            let max_size = decoder.config().max_container_size;
             let mut map = std::collections::BTreeMap::new();
+            let mut pair_count: usize = 0;
             while !decoder.is_at_container_end()? {
+                if pair_count >= max_size {
+                    return Err(Error::MaxContainerSizeExceeded);
+                }
                 let key_value = decoder.decode_value()?;
                 let key = match key_value {
                     DecodedValue::String(s) => s.to_owned(),
@@ -458,6 +466,7 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
                     }
                 }
                 map.insert(key, value);
+                pair_count += 1;
             }
             decoder.end_container()?;
             Ok(Value::Object(map))
@@ -509,14 +518,14 @@ fn encode_value_recursive<W: Write>(encoder: &mut Encoder<W>, value: &Value) -> 
         Value::BigNumber(bn) => encoder.write_big_number(*bn),
         Value::String(s) => encoder.write_str(s),
         Value::Array(arr) => {
-            encoder.begin_array(arr.len())?;
+            encoder.begin_array()?;
             for item in arr {
                 encode_value_recursive(encoder, item)?;
             }
             encoder.end_container()
         }
         Value::Object(map) => {
-            encoder.begin_object(map.len())?;
+            encoder.begin_object()?;
             for (key, val) in map {
                 encoder.write_str(key)?;
                 encode_value_recursive(encoder, val)?;
