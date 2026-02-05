@@ -268,12 +268,21 @@ impl<W: Write> Encoder<W> {
         self.write_f64(f64::from(value))
     }
 
-    /// Encode a `BigNumber` using zigzag LEB128 encoding.
+    /// Encode a `BigNumber` using zigzag LEB128 metadata and LE magnitude bytes.
     pub fn write_big_number(&mut self, value: BigNumber) -> Result<()> {
         if self.expecting_object_key() {
             return Err(Error::ExpectedObjectKey);
         }
 
+        self.write_big_number_payload(value)?;
+
+        self.toggle_object_state();
+        Ok(())
+    }
+
+    /// Write the BigNumber payload (type code + exponent + signed_length + magnitude).
+    /// Shared between checked and unchecked paths.
+    fn write_big_number_payload(&mut self, value: BigNumber) -> Result<()> {
         self.write_byte(type_code::BIG_NUMBER)?;
 
         // Encode exponent as zigzag LEB128
@@ -281,24 +290,27 @@ impl<W: Write> Encoder<W> {
         let n = leb128_encode(zigzag_encode(value.exponent), &mut buf);
         self.write_bytes(&buf[..n])?;
 
-        // Encode signed significand as zigzag LEB128
-        let signed_sig = value.signed_significand();
-        // Clamp to i64 range for zigzag encoding
-        let sig_i64 = if signed_sig > i64::MAX as i128 {
-            // For very large positive significands, encode as raw bytes
-            // This shouldn't happen in practice since significand is u64
-            // and we need sign, but handle it gracefully
-            return Err(Error::InvalidData("BigNumber significand too large for zigzag encoding".into()));
-        } else if signed_sig < i64::MIN as i128 {
-            return Err(Error::InvalidData("BigNumber significand too large for zigzag encoding".into()));
+        if value.significand == 0 {
+            // Zero significand: signed_length = 0, no magnitude bytes
+            self.write_byte(0x00)?;
+            return Ok(());
+        }
+
+        // Convert significand to LE bytes and find normalized length
+        let sig_bytes = value.significand.to_le_bytes();
+        let byte_count = 8 - sig_bytes.iter().rev().take_while(|&&b| b == 0).count();
+
+        // Encode signed_length: positive byte_count for positive, negative for negative
+        let signed_length: i64 = if value.sign < 0 {
+            -(byte_count as i64)
         } else {
-            signed_sig as i64
+            byte_count as i64
         };
-        let n = leb128_encode(zigzag_encode(sig_i64), &mut buf);
+        let n = leb128_encode(zigzag_encode(signed_length), &mut buf);
         self.write_bytes(&buf[..n])?;
 
-        self.toggle_object_state();
-        Ok(())
+        // Write raw LE magnitude bytes
+        self.write_bytes(&sig_bytes[..byte_count])
     }
 
     /// Encode a string.

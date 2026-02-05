@@ -514,7 +514,7 @@ impl<'a> Decoder<'a> {
         Err(Error::Truncated)
     }
 
-    /// Decode a BigNumber (zigzag LEB128 exponent + zigzag LEB128 signed significand).
+    /// Decode a BigNumber (zigzag LEB128 exponent + zigzag LEB128 signed_length + LE magnitude).
     fn decode_big_number(&mut self) -> Result<DecodedValue<'a>> {
         let remaining = &self.data[self.pos..];
 
@@ -524,15 +524,39 @@ impl<'a> Decoder<'a> {
         self.pos += exp_consumed;
         let exponent = zigzag_decode(exp_raw);
 
-        // Decode signed significand
+        // Decode signed_length
         let remaining = &self.data[self.pos..];
-        let (sig_raw, sig_consumed) = leb128_decode(remaining)
+        let (slen_raw, slen_consumed) = leb128_decode(remaining)
             .ok_or(Error::Truncated)?;
-        self.pos += sig_consumed;
-        let signed_sig = zigzag_decode(sig_raw);
+        self.pos += slen_consumed;
+        let signed_length = zigzag_decode(slen_raw);
 
-        let sign: i8 = if signed_sig < 0 { -1 } else { 1 };
-        let significand = signed_sig.unsigned_abs();
+        if signed_length == 0 {
+            return Ok(DecodedValue::BigNumber(BigNumber::new(1, 0, exponent)));
+        }
+
+        let sign: i8 = if signed_length < 0 { -1 } else { 1 };
+        let byte_count = signed_length.unsigned_abs() as usize;
+
+        if byte_count > 8 {
+            return Err(Error::InvalidData(
+                "BigNumber magnitude exceeds u64 range".into(),
+            ));
+        }
+
+        // Read raw LE magnitude bytes
+        let magnitude_bytes = self.read_bytes(byte_count)?;
+
+        // Validate normalization: last byte (most significant) must be non-zero
+        if magnitude_bytes[byte_count - 1] == 0 {
+            return Err(Error::InvalidData(
+                "non-normalized BigNumber magnitude".into(),
+            ));
+        }
+
+        let mut buf = [0u8; 8];
+        buf[..byte_count].copy_from_slice(magnitude_bytes);
+        let significand = u64::from_le_bytes(buf);
 
         Ok(DecodedValue::BigNumber(BigNumber::new(sign, significand, exponent)))
     }

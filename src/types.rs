@@ -15,7 +15,7 @@ pub mod type_code {
     // 0xc9: Reserved
     pub const RESERVED_C9: u8 = 0xc9;
 
-    // Big number: zigzag LEB128 exponent + zigzag LEB128 signed significand
+    // Big number: zigzag LEB128 exponent + zigzag LEB128 signed_length + LE magnitude bytes
     pub const BIG_NUMBER: u8 = 0xca;
 
     // Floats (little-endian IEEE 754)
@@ -219,10 +219,11 @@ pub const NATIVE_SIZE_BYTES: [usize; 8] = [1, 2, 4, 4, 8, 8, 8, 8];
 
 /// A big number with arbitrary precision base-10 representation.
 ///
-/// The value is: signed_significand × 10^exponent
+/// The value is: sign(signed_length) × magnitude × 10^exponent
 ///
-/// Encoded as zigzag LEB128 for both exponent and signed significand.
-/// Negative zero is NOT representable (use IEEE754 float -0.0 instead).
+/// Encoded as zigzag LEB128 exponent, zigzag LEB128 signed_length, then raw
+/// little-endian magnitude bytes. Negative zero is NOT representable (use
+/// IEEE754 float -0.0 instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BigNumber {
     /// The absolute value of the significand (0 to 2^64-1)

@@ -34,9 +34,9 @@ The project uses a layered architecture:
 
 ### types.rs
 - Type codes as defined by the BONJSON spec
-- `BigNumber` struct for arbitrary precision decimals (significand × 10^exponent)
+- `BigNumber` struct for arbitrary precision decimals (sign × magnitude × 10^exponent)
 - Helper functions for encoding/decoding type codes using mask-based dispatch
-- Zigzag and LEB128 encoding/decoding helpers for BigNumber
+- Zigzag and LEB128 encoding/decoding helpers for BigNumber metadata
 - Resource limits (max depth, max container size, etc.)
 
 ### error.rs
@@ -49,6 +49,7 @@ The project uses a layered architecture:
 - Supports all BONJSON types: small ints, sized ints (u8-u64, i8-i64), float32, float64, BigNumber
 - Automatically chooses smallest encoding for integers and floats
 - Validates floats (rejects NaN/Infinity by default)
+- BigNumber encoding: zigzag LEB128 exponent + zigzag LEB128 signed_length + raw LE magnitude bytes
 - Delimiter-terminated containers (FC/FD start, FE end)
 - FF-terminated long strings (FF + payload + FF)
 
@@ -58,6 +59,7 @@ The project uses a layered architecture:
 - `DuplicateKeyMode` - Error, KeepFirst, or KeepLast
 - Optional SIMD-accelerated UTF-8 validation via `simd-utf8` feature
 - Returns `DecodedValue<'a>` enum for streaming access
+- BigNumber decoding: zigzag LEB128 exponent + zigzag LEB128 signed_length + raw LE magnitude bytes with normalization validation
 - Direct decode methods for serde path avoid `DecodedValue` intermediary
 
 ### value.rs
@@ -89,7 +91,7 @@ The project uses a layered architecture:
 |-------|---------|
 | 00–C8 | Small integers (-100 to 100), value = code - 100 |
 | C9 | Reserved |
-| CA | BigNumber (zigzag LEB128 exponent + significand) |
+| CA | BigNumber (zigzag LEB128 exponent + signed_length + LE magnitude) |
 | CB | float32 (IEEE 754, little-endian) |
 | CC | float64 (IEEE 754, little-endian) |
 | CD | null |
