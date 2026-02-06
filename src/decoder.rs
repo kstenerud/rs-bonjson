@@ -7,6 +7,7 @@
 
 use crate::error::{Error, Result};
 use crate::types::{limits, type_code, BigNumber, zigzag_decode, leb128_decode};
+use std::borrow::Cow;
 
 /// Validate and convert bytes to a UTF-8 string.
 /// Uses simdutf8 for SIMD-accelerated validation when the feature is enabled.
@@ -20,6 +21,30 @@ fn validate_utf8(bytes: &[u8]) -> Result<&str> {
 #[inline]
 fn validate_utf8(bytes: &[u8]) -> Result<&str> {
     std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
+}
+
+/// Delete invalid UTF-8 bytes, keeping only valid UTF-8 sequences.
+fn delete_invalid_utf8(bytes: &[u8]) -> String {
+    let mut result = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match std::str::from_utf8(&bytes[i..]) {
+            Ok(valid) => {
+                result.push_str(valid);
+                break;
+            }
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                if valid_up_to > 0 {
+                    // Safety: from_utf8 confirmed these bytes are valid
+                    result.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[i..i + valid_up_to]) });
+                }
+                // Skip the invalid byte(s)
+                i += valid_up_to + e.error_len().unwrap_or(1);
+            }
+        }
+    }
+    result
 }
 
 /// How to handle duplicate keys in objects.
@@ -39,13 +64,77 @@ impl Default for DuplicateKeyMode {
     }
 }
 
+/// How to handle NaN and Infinity float values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NanInfinityMode {
+    /// Reject NaN and Infinity values (default)
+    Reject,
+    /// Allow NaN and Infinity as float values
+    Allow,
+    /// Convert NaN and Infinity to string values
+    Stringify,
+}
+
+impl Default for NanInfinityMode {
+    fn default() -> Self {
+        Self::Reject
+    }
+}
+
+/// How to handle BigNumber values that exceed configured limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutOfRangeMode {
+    /// Return an error (default)
+    Error,
+    /// Convert to string representation
+    Stringify,
+}
+
+impl Default for OutOfRangeMode {
+    fn default() -> Self {
+        Self::Error
+    }
+}
+
+/// How to handle invalid UTF-8 in strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidUtf8Mode {
+    /// Reject invalid UTF-8 (default)
+    Reject,
+    /// Replace invalid bytes with U+FFFD replacement character
+    Replace,
+    /// Delete invalid bytes
+    Delete,
+}
+
+impl Default for InvalidUtf8Mode {
+    fn default() -> Self {
+        Self::Reject
+    }
+}
+
+/// Unicode normalization mode for string comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnicodeNormalization {
+    /// No normalization (default)
+    None,
+    /// NFC normalization
+    Nfc,
+}
+
+impl Default for UnicodeNormalization {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 /// Configuration options for the decoder.
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
     /// Allow NUL characters in strings (default: false)
     pub allow_nul: bool,
-    /// Allow NaN and Infinity values (default: false)
-    pub allow_nan_infinity: bool,
+    /// How to handle NaN and Infinity values (default: Reject)
+    pub nan_infinity_mode: NanInfinityMode,
     /// Allow trailing bytes after the document (default: false)
     pub allow_trailing_bytes: bool,
     /// How to handle duplicate keys (default: Error)
@@ -62,13 +151,20 @@ pub struct DecoderConfig {
     pub max_bignumber_exponent: usize,
     /// Maximum BigNumber magnitude in bytes
     pub max_bignumber_magnitude: usize,
+    /// How to handle out-of-range BigNumber values (default: Error)
+    pub out_of_range_mode: OutOfRangeMode,
+    /// How to handle invalid UTF-8 in strings (default: Reject)
+    pub invalid_utf8_mode: InvalidUtf8Mode,
+    /// Unicode normalization mode (default: None).
+    /// Requires the `unicode-normalization` feature for Nfc mode.
+    pub unicode_normalization: UnicodeNormalization,
 }
 
 impl Default for DecoderConfig {
     fn default() -> Self {
         Self {
             allow_nul: false,
-            allow_nan_infinity: false,
+            nan_infinity_mode: NanInfinityMode::default(),
             allow_trailing_bytes: false,
             duplicate_key_mode: DuplicateKeyMode::default(),
             max_depth: limits::MAX_DEPTH,
@@ -77,6 +173,9 @@ impl Default for DecoderConfig {
             max_document_size: limits::MAX_DOCUMENT_SIZE,
             max_bignumber_exponent: limits::MAX_BIGNUMBER_EXPONENT,
             max_bignumber_magnitude: limits::MAX_BIGNUMBER_MAGNITUDE,
+            out_of_range_mode: OutOfRangeMode::default(),
+            invalid_utf8_mode: InvalidUtf8Mode::default(),
+            unicode_normalization: UnicodeNormalization::default(),
         }
     }
 }
@@ -99,7 +198,7 @@ pub enum DecodedValue<'a> {
     UInt(u64),
     Float(f64),
     BigNumber(BigNumber),
-    String(&'a str),
+    String(Cow<'a, str>),
     ArrayStart,
     ObjectStart,
     ContainerEnd,
@@ -376,7 +475,7 @@ impl<'a> Decoder<'a> {
         // Short strings: 0xd0-0xdf
         if type_code::is_short_string(tc) {
             let len = type_code::short_string_len(tc);
-            let s = self.decode_string_content(len)?;
+            let s = self.decode_string_content_cow(len)?;
             return Ok(DecodedValue::String(s));
         }
 
@@ -406,7 +505,7 @@ impl<'a> Decoder<'a> {
             type_code::FALSE => Ok(DecodedValue::Bool(false)),
             type_code::TRUE => Ok(DecodedValue::Bool(true)),
             type_code::STRING_LONG => {
-                let s = self.decode_long_string_content()?;
+                let s = self.decode_long_string_content_cow()?;
                 Ok(DecodedValue::String(s))
             }
             type_code::ARRAY => {
@@ -465,7 +564,7 @@ impl<'a> Decoder<'a> {
     /// Check if a float value is allowed.
     #[inline]
     fn check_float(&self, value: f64) -> Result<()> {
-        if !self.config.allow_nan_infinity {
+        if self.config.nan_infinity_mode == NanInfinityMode::Reject {
             if value.is_nan() {
                 return Err(Error::NanNotAllowed);
             }
@@ -520,6 +619,66 @@ impl<'a> Decoder<'a> {
         Err(Error::Truncated)
     }
 
+    /// Decode string content with invalid UTF-8 handling.
+    /// Returns Cow::Borrowed for valid UTF-8, Cow::Owned for replaced/deleted.
+    fn decode_string_content_cow(&mut self, len: usize) -> Result<Cow<'a, str>> {
+        if len > self.config.max_string_length {
+            return Err(Error::MaxStringLengthExceeded);
+        }
+
+        let bytes = self.read_bytes(len)?;
+
+        let s = match validate_utf8(bytes) {
+            Ok(s) => Cow::Borrowed(s),
+            Err(_) => match self.config.invalid_utf8_mode {
+                InvalidUtf8Mode::Reject => return Err(Error::InvalidUtf8),
+                InvalidUtf8Mode::Replace => Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
+                InvalidUtf8Mode::Delete => Cow::Owned(delete_invalid_utf8(bytes)),
+            },
+        };
+
+        if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
+            return Err(Error::NulCharacter);
+        }
+
+        Ok(s)
+    }
+
+    /// Decode long string content with invalid UTF-8 handling.
+    fn decode_long_string_content_cow(&mut self) -> Result<Cow<'a, str>> {
+        let start = self.pos;
+        let remaining = &self.data[start..];
+
+        if let Some(offset) = memchr::memchr(0xFF, remaining) {
+            let end = start + offset;
+            self.pos = end + 1; // consume the terminator
+
+            let len = offset;
+            if len > self.config.max_string_length {
+                return Err(Error::MaxStringLengthExceeded);
+            }
+
+            let bytes = &self.data[start..end];
+
+            let s = match validate_utf8(bytes) {
+                Ok(s) => Cow::Borrowed(s),
+                Err(_) => match self.config.invalid_utf8_mode {
+                    InvalidUtf8Mode::Reject => return Err(Error::InvalidUtf8),
+                    InvalidUtf8Mode::Replace => Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
+                    InvalidUtf8Mode::Delete => Cow::Owned(delete_invalid_utf8(bytes)),
+                },
+            };
+
+            if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
+                return Err(Error::NulCharacter);
+            }
+
+            return Ok(s);
+        }
+
+        Err(Error::Truncated)
+    }
+
     /// Decode a BigNumber (zigzag LEB128 exponent + zigzag LEB128 signed_length + LE magnitude).
     fn decode_big_number(&mut self) -> Result<DecodedValue<'a>> {
         let remaining = &self.data[self.pos..];
@@ -532,7 +691,9 @@ impl<'a> Decoder<'a> {
 
         // Check exponent limit
         if (exponent.unsigned_abs() as usize) > self.config.max_bignumber_exponent {
-            return Err(Error::MaxBignumberExponentExceeded);
+            if self.config.out_of_range_mode != OutOfRangeMode::Stringify {
+                return Err(Error::MaxBignumberExponentExceeded);
+            }
         }
 
         // Decode signed_length
@@ -551,9 +712,12 @@ impl<'a> Decoder<'a> {
 
         // Check magnitude limit (also enforces u64 range since default max is 8)
         if byte_count > self.config.max_bignumber_magnitude {
-            return Err(Error::MaxBignumberMagnitudeExceeded);
+            if self.config.out_of_range_mode != OutOfRangeMode::Stringify {
+                return Err(Error::MaxBignumberMagnitudeExceeded);
+            }
         }
 
+        // Hard safety cap for stringify mode, and always enforce u64 range
         if byte_count > 8 {
             return Err(Error::InvalidData(
                 "BigNumber magnitude exceeds u64 range".into(),
@@ -616,6 +780,7 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     #[test]
     fn test_decode_small_ints() {
@@ -659,11 +824,11 @@ mod tests {
     fn test_decode_short_string() {
         // Empty string: 0xd0
         let mut dec = Decoder::new(&[0xd0]);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(""));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("")));
 
         // "x": 0xd1 + 'x'
         let mut dec = Decoder::new(&[0xd1, 0x78]);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("x"));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("x")));
     }
 
     #[test]
@@ -673,7 +838,7 @@ mod tests {
         data.extend_from_slice(b"abcdefghijklmnop");
         data.push(0xff);
         let mut dec = Decoder::new(&data);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("abcdefghijklmnop"));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("abcdefghijklmnop")));
     }
 
     #[test]
@@ -706,7 +871,7 @@ mod tests {
         assert!(!dec.is_at_container_end().unwrap());
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(1));
         assert!(!dec.is_at_container_end().unwrap());
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("x"));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("x")));
         assert!(!dec.is_at_container_end().unwrap());
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Null);
         assert!(dec.is_at_container_end().unwrap());
@@ -722,7 +887,7 @@ mod tests {
 
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::ObjectStart);
         assert!(!dec.is_at_container_end().unwrap());
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String("a"));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("a")));
         assert!(!dec.is_at_container_end().unwrap());
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(1));
         assert!(dec.is_at_container_end().unwrap());

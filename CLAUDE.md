@@ -57,7 +57,12 @@ The project uses a layered architecture:
 - `Decoder<'a>` - zero-copy decoder that borrows from input slice
 - `DecoderConfig` for configurable limits and options
 - `DuplicateKeyMode` - Error, KeepFirst, or KeepLast
+- `NanInfinityMode` - Reject, Allow, or Stringify
+- `OutOfRangeMode` - Error or Stringify (for BigNumber limit violations)
+- `InvalidUtf8Mode` - Reject, Replace, or Delete
+- `UnicodeNormalization` - None or Nfc (requires `unicode-normalization` feature)
 - Optional SIMD-accelerated UTF-8 validation via `simd-utf8` feature
+- `DecodedValue<'a>` enum uses `Cow<'a, str>` for strings (zero-copy in default mode)
 - Returns `DecodedValue<'a>` enum for streaming access
 - BigNumber decoding: zigzag LEB128 exponent + zigzag LEB128 signed_length + raw LE magnitude bytes with normalization validation
 - Direct decode methods for serde path avoid `DecodedValue` intermediary
@@ -134,15 +139,11 @@ with a single mask operation, then determines sign with `int_is_signed()`.
 
 ### Compliance Levels
 - **Basic compliance**: UTF-8 validation, NUL character rejection, duplicate key detection (byte-for-byte comparison)
-- **Secure compliance**: Same as basic plus NFC normalization for duplicate key detection (not yet implemented)
-- Optional features: NaN/Infinity handling, duplicate key keep_first/keep_last modes
+- **Secure compliance**: Same as basic plus NFC normalization for duplicate key detection (requires `unicode-normalization` feature)
+- Optional features: NaN/Infinity handling (allow/stringify), duplicate key keep_first/keep_last modes, invalid UTF-8 replace/delete, out-of-range BigNumber stringify
 
 ### Known Limitations
 - BigNumber significands limited to i64 range
-- NaN/Infinity stringify mode not implemented (NaN/Infinity rejection returns `invalid_data` error type per spec)
-- Unicode normalization (NFC) not implemented
-- Out-of-range BigNumber stringify mode not implemented
-- Invalid UTF-8 replace/delete modes not implemented
 
 ### Performance Considerations
 - For file/network I/O, wrap writers in `BufWriter` - the encoder writes small chunks
@@ -161,6 +162,17 @@ Enable with: `cargo build --features simd-utf8`
 
 The implementation uses `simdutf8::basic::from_utf8()` which leverages SSE2/AVX2 (x86) or
 NEON (ARM) instructions when available.
+
+### `unicode-normalization`
+Enables NFC Unicode normalization for string values and duplicate key detection.
+When `UnicodeNormalization::Nfc` is configured in `DecoderConfig`, all decoded strings
+and object keys are NFC-normalized. This enables secure compliance-level duplicate key
+detection where differently-encoded Unicode strings that render identically are treated
+as duplicates.
+
+Enable with: `cargo build --features unicode-normalization`
+
+Zero overhead when not configured (normalization is off by default).
 
 ## Testing
 

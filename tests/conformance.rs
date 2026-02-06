@@ -18,8 +18,12 @@ const KNOWN_OPTIONS: &[&str] = &[
     "max_container_size",
     "max_string_length",
     "max_document_size",
+    "max_bignumber_exponent",
+    "max_bignumber_magnitude",
     "duplicate_key",
     "nan_infinity_behavior",
+    "unicode_normalization",
+    "out_of_range",
     "invalid_utf8",
 ];
 
@@ -42,6 +46,8 @@ const KNOWN_ERROR_TYPES: &[&str] = &[
     "max_string_length_exceeded",
     "max_container_size_exceeded",
     "max_document_size_exceeded",
+    "max_bignumber_exponent_exceeded",
+    "max_bignumber_magnitude_exceeded",
 ];
 
 /// Convert a hex string (with optional spaces) to bytes.
@@ -88,17 +94,18 @@ fn parse_number_marker(s: &str) -> Value {
                 return Value::UInt(value);
             }
         }
-        // If it doesn't fit in u64, try as BigNumber (will be handled as float)
         return Value::Float(s.parse().unwrap_or(f64::NAN));
     }
 
-    // Check for scientific notation or decimal
+    // Check for scientific notation or decimal - try BigNumber first
     if s.contains('.') || s.to_lowercase().contains('e') {
-        // For very large/small numbers, parse as f64
+        if let Some(bn) = parse_decimal_as_bignumber(s) {
+            return Value::BigNumber(bn);
+        }
+        // Fallback to f64
         if let Ok(f) = s.parse::<f64>() {
             return Value::Float(f);
         }
-        // If that fails, it might be a BigNumber that needs special handling
         return Value::Float(f64::NAN);
     }
 
@@ -107,8 +114,6 @@ fn parse_number_marker(s: &str) -> Value {
         if let Ok(v) = s.parse::<i64>() {
             Value::Int(v)
         } else {
-            // Very large negative number - use BigNumber representation
-            // For now, just use float approximation
             Value::Float(s.parse().unwrap_or(f64::NEG_INFINITY))
         }
     } else if let Ok(value) = s.parse::<u64>() {
@@ -118,10 +123,91 @@ fn parse_number_marker(s: &str) -> Value {
             Value::UInt(value)
         }
     } else {
-        // Very large positive number - use BigNumber representation
-        // For now, just use float approximation
         Value::Float(s.parse().unwrap_or(f64::INFINITY))
     }
+}
+
+/// Try to parse a decimal string into a BigNumber.
+/// Handles formats like "1e-1000", "1.234567890123456789e-200", "3.14", etc.
+/// Returns None if the number fits exactly in f64 without precision loss.
+fn parse_decimal_as_bignumber(s: &str) -> Option<serde_bonjson::BigNumber> {
+    let s = s.trim();
+    let negative = s.starts_with('-');
+    let s = if negative { &s[1..] } else { s };
+
+    // Split at 'e' or 'E'
+    let (mantissa_str, exp_str) = if let Some(e_pos) = s.find(|c: char| c == 'e' || c == 'E') {
+        (&s[..e_pos], Some(&s[e_pos + 1..]))
+    } else {
+        (s, None)
+    };
+
+    // Parse explicit exponent
+    let explicit_exp: i64 = match exp_str {
+        Some(e) => e.parse().ok()?,
+        None => 0,
+    };
+
+    // Parse mantissa: remove decimal point and track implicit exponent shift
+    let (digits_str, decimal_shift) = if let Some(dot_pos) = mantissa_str.find('.') {
+        let int_part = &mantissa_str[..dot_pos];
+        let frac_part = &mantissa_str[dot_pos + 1..];
+        let combined = format!("{}{}", int_part, frac_part);
+        (combined, frac_part.len() as i64)
+    } else {
+        (mantissa_str.to_string(), 0i64)
+    };
+
+    // Strip leading zeros from digits
+    let digits_str = digits_str.trim_start_matches('0');
+    if digits_str.is_empty() {
+        // Value is zero
+        return Some(serde_bonjson::BigNumber::new(1, 0, 0));
+    }
+
+    // Strip trailing zeros from digits and adjust exponent
+    let trailing_zeros = digits_str.len() - digits_str.trim_end_matches('0').len();
+    let digits_str = digits_str.trim_end_matches('0');
+
+    let exponent = explicit_exp - decimal_shift + trailing_zeros as i64;
+
+    // First check if it can be parsed as f64
+    let original_str = if negative {
+        format!("-{}", mantissa_str)
+    } else {
+        mantissa_str.to_string()
+    };
+    let with_exp = if let Some(exp) = exp_str {
+        format!("{}e{}", original_str, exp)
+    } else {
+        original_str
+    };
+
+    if let Ok(f) = with_exp.parse::<f64>() {
+        // If it parses as f64 and is finite, check if we need BigNumber for precision
+        if f.is_finite() && f != 0.0 {
+            // Only use BigNumber if the string has more precision than f64 can represent
+            // AND the exponent is beyond what f64 can handle precisely
+            // f64 can handle exponents roughly in range [-308, 308], so use a stricter threshold
+            let needs_bignumber = digits_str.len() > 15  // f64 has ~15-17 significant digits
+                && explicit_exp.abs() > 400;  // Way beyond f64 range
+
+            if !needs_bignumber {
+                return None;  // Use f64
+            }
+        } else if f == 0.0 {
+            // Zero - could be underflow, but still use f64
+            return None;
+        }
+    }
+
+    // Parse significand - if it fits in u64, use BigNumber
+    if let Ok(significand) = digits_str.parse::<u64>() {
+        let sign: i8 = if negative { -1 } else { 1 };
+        return Some(serde_bonjson::BigNumber::new(sign, significand, exponent));
+    }
+
+    None
 }
 
 /// Parse C99 hex float format like "0x1.921fb54442d18p+1".
@@ -274,6 +360,21 @@ fn json_to_value_tracked(json: &JsonValue) -> ConvertedValue {
     }
 }
 
+/// Normalize a BigNumber by stripping trailing zeros from significand
+/// and adjusting exponent. Returns (normalized_significand, adjusted_exponent).
+fn normalize_bignumber(sign: i8, significand: u64, exponent: i64) -> (u64, i64) {
+    if significand == 0 {
+        return (0, 0);
+    }
+    let mut sig = significand;
+    let mut exp = exponent;
+    while sig % 10 == 0 && sig > 0 {
+        sig /= 10;
+        exp += 1;
+    }
+    (sig, exp)
+}
+
 /// Compare two values for equality (handling NaN and negative zero).
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
@@ -320,7 +421,17 @@ fn values_equal(a: &Value, b: &Value) -> bool {
                 && a.iter()
                     .all(|(k, v)| b.get(k).map(|bv| values_equal(v, bv)).unwrap_or(false))
         }
-        (Value::BigNumber(a), Value::BigNumber(b)) => a == b,
+        (Value::BigNumber(a), Value::BigNumber(b)) => {
+            // Normalize both for comparison: strip trailing zeros from significand
+            // and adjust exponent accordingly
+            let (a_sig, a_exp) = normalize_bignumber(a.sign, a.significand, a.exponent);
+            let (b_sig, b_exp) = normalize_bignumber(b.sign, b.significand, b.exponent);
+            if a.significand == 0 && b.significand == 0 {
+                true // Both zero
+            } else {
+                a.sign == b.sign && a_sig == b_sig && a_exp == b_exp
+            }
+        }
         // BigNumber to other numeric
         (Value::BigNumber(bn), Value::Int(i)) => bn.to_i64() == Some(*i),
         (Value::Int(i), Value::BigNumber(bn)) => bn.to_i64() == Some(*i),
@@ -497,7 +608,7 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
                     }
                 }
                 "max_depth" | "max_container_size" | "max_string_length"
-                | "max_document_size" => {
+                | "max_document_size" | "max_bignumber_exponent" | "max_bignumber_magnitude" => {
                     if let Some(n) = value.as_i64() {
                         if n < 0 {
                             return Err(ValidationError::Structural(format!(
@@ -547,6 +658,36 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
                         if !["reject", "replace", "delete", "pass_through"].contains(&s) {
                             return Err(ValidationError::Structural(format!(
                                 "option '{}' has invalid value '{}' (must be reject, replace, delete, or pass_through)",
+                                key, s
+                            )));
+                        }
+                    } else {
+                        return Err(ValidationError::Structural(format!(
+                            "option '{}' must be a string",
+                            key
+                        )));
+                    }
+                }
+                "unicode_normalization" => {
+                    if let Some(s) = value.as_str() {
+                        if !["none", "nfc"].contains(&s) {
+                            return Err(ValidationError::Structural(format!(
+                                "option '{}' has invalid value '{}' (must be none or nfc)",
+                                key, s
+                            )));
+                        }
+                    } else {
+                        return Err(ValidationError::Structural(format!(
+                            "option '{}' must be a string",
+                            key
+                        )));
+                    }
+                }
+                "out_of_range" => {
+                    if let Some(s) = value.as_str() {
+                        if !["error", "stringify"].contains(&s) {
+                            return Err(ValidationError::Structural(format!(
+                                "option '{}' has invalid value '{}' (must be error or stringify)",
                                 key, s
                             )));
                         }
@@ -726,9 +867,16 @@ fn validate_number_markers(value: &JsonValue) -> Result<(), ValidationError> {
 }
 
 /// Features this implementation supports.
+/// Features this implementation supports.
 const SUPPORTED_FEATURES: &[&str] = &[
     "int64",
     "encode_nul_rejection",
+    "bignumber_exponent_lt_neg128",
+    "bignumber_exponent_gt_127",
+    "nan_infinity_stringify",
+    "out_of_range_stringify",
+    "invalid_utf8_replace",
+    "invalid_utf8_delete",
 ];
 
 /// Check if this test requires unsupported features.
@@ -737,9 +885,15 @@ fn has_unsupported_requirements(test: &JsonValue) -> bool {
         if let Some(arr) = requires.as_array() {
             for req in arr {
                 if let Some(feature) = req.as_str() {
-                    if !SUPPORTED_FEATURES.contains(&feature) {
-                        return true;
+                    if SUPPORTED_FEATURES.contains(&feature) {
+                        continue;
                     }
+                    // Check feature-gated features
+                    #[cfg(feature = "unicode-normalization")]
+                    if feature == "unicode_normalization_nfc" {
+                        continue;
+                    }
+                    return true;
                 }
             }
         }
@@ -768,18 +922,17 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         // Handle nan_infinity_behavior option (can be "allow", "stringify", or "reject")
         if let Some(nan_inf) = options.get("nan_infinity_behavior").and_then(|v| v.as_str()) {
             match nan_inf {
-                "allow" => config.allow_nan_infinity = true,
-                "stringify" => {
-                    // Not fully implemented yet - skip this test
-                    return Err(format!("{}: skipped (stringify not implemented)", name));
-                }
-                _ => config.allow_nan_infinity = false,
+                "allow" => config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Allow,
+                "stringify" => config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Stringify,
+                _ => config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Reject,
             }
         }
         // Also support the boolean form
         if let Some(allow_nan_infinity) = options.get("allow_nan_infinity").and_then(|v| v.as_bool())
         {
-            config.allow_nan_infinity = allow_nan_infinity;
+            if allow_nan_infinity {
+                config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Allow;
+            }
         }
         // Handle duplicate_key option (can be "error", "keep_first", "keep_last")
         if let Some(dup_key) = options.get("duplicate_key").and_then(|v| v.as_str()) {
@@ -790,9 +943,12 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
                 _ => {}
             }
         }
-        // Handle invalid_utf8 option (not implemented - skip)
-        if let Some(_invalid_utf8) = options.get("invalid_utf8").and_then(|v| v.as_str()) {
-            return Err(format!("{}: skipped (invalid_utf8 mode not implemented)", name));
+        if let Some(invalid_utf8) = options.get("invalid_utf8").and_then(|v| v.as_str()) {
+            match invalid_utf8 {
+                "replace" => config.invalid_utf8_mode = serde_bonjson::InvalidUtf8Mode::Replace,
+                "delete" => config.invalid_utf8_mode = serde_bonjson::InvalidUtf8Mode::Delete,
+                _ => config.invalid_utf8_mode = serde_bonjson::InvalidUtf8Mode::Reject,
+            }
         }
         if let Some(allow_trailing) = options.get("allow_trailing_bytes").and_then(|v| v.as_bool())
         {
@@ -816,13 +972,26 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         if let Some(max_mag) = options.get("max_bignumber_magnitude").and_then(|v| v.as_u64()) {
             config.max_bignumber_magnitude = max_mag as usize;
         }
-        // Handle unicode_normalization option (not implemented - skip)
-        if let Some(_norm) = options.get("unicode_normalization").and_then(|v| v.as_str()) {
-            return Err(format!("{}: skipped (unicode_normalization not implemented)", name));
+        if let Some(norm) = options.get("unicode_normalization").and_then(|v| v.as_str()) {
+            match norm {
+                "nfc" => {
+                    #[cfg(feature = "unicode-normalization")]
+                    {
+                        config.unicode_normalization = serde_bonjson::UnicodeNormalization::Nfc;
+                    }
+                    #[cfg(not(feature = "unicode-normalization"))]
+                    {
+                        return Err(format!("{}: skipped (unicode-normalization feature not enabled)", name));
+                    }
+                }
+                _ => {}
+            }
         }
-        // Handle out_of_range option (not implemented - skip)
-        if let Some(_oor) = options.get("out_of_range").and_then(|v| v.as_str()) {
-            return Err(format!("{}: skipped (out_of_range not implemented)", name));
+        if let Some(oor) = options.get("out_of_range").and_then(|v| v.as_str()) {
+            match oor {
+                "stringify" => config.out_of_range_mode = serde_bonjson::OutOfRangeMode::Stringify,
+                _ => config.out_of_range_mode = serde_bonjson::OutOfRangeMode::Error,
+            }
         }
         config
     } else {
@@ -897,7 +1066,7 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
             let input = json_to_value(&test["input"]);
 
             // Skip if input contains NaN/Infinity (we reject those by default)
-            if contains_nan_or_infinity(&input) && !config.allow_nan_infinity {
+            if contains_nan_or_infinity(&input) && config.nan_infinity_mode == serde_bonjson::NanInfinityMode::Reject {
                 return Err(format!("{}: skipped (NaN/Infinity in input)", name));
             }
 

@@ -72,7 +72,10 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
                     visitor.visit_f64(bn.to_f64())
                 }
             }
-            DecodedValue::String(s) => visitor.visit_borrowed_str(s),
+            DecodedValue::String(s) => match s {
+                std::borrow::Cow::Borrowed(b) => visitor.visit_borrowed_str(b),
+                std::borrow::Cow::Owned(o) => visitor.visit_string(o),
+            },
             DecodedValue::ArrayStart => {
                 let seq = SeqDeserializer::new(self);
                 visitor.visit_seq(seq)

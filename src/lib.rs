@@ -154,7 +154,7 @@ mod value_tests;
 
 // Re-export commonly used items at the crate root
 pub use de::{from_slice, from_slice_with_config, Deserializer};
-pub use decoder::{DecodedValue, Decoder, DecoderConfig, DuplicateKeyMode};
+pub use decoder::{DecodedValue, Decoder, DecoderConfig, DuplicateKeyMode, InvalidUtf8Mode, NanInfinityMode, OutOfRangeMode, UnicodeNormalization};
 pub use encoder::{Encoder, EncoderConfig};
 pub use error::{Error, Result};
 pub use ser::Serializer;
@@ -414,17 +414,65 @@ pub fn decode_value_with_config(data: &[u8], config: DecoderConfig) -> Result<Va
     Ok(value)
 }
 
+/// Apply NFC normalization if configured and the feature is enabled.
+#[cfg(feature = "unicode-normalization")]
+fn maybe_nfc_normalize(mode: decoder::UnicodeNormalization, s: String) -> String {
+    if mode == decoder::UnicodeNormalization::Nfc {
+        use unicode_normalization::UnicodeNormalization;
+        let normalized: String = s.nfc().collect();
+        normalized
+    } else {
+        s
+    }
+}
+
+/// No-op when unicode-normalization feature is not enabled.
+#[cfg(not(feature = "unicode-normalization"))]
+fn maybe_nfc_normalize(_mode: decoder::UnicodeNormalization, s: String) -> String {
+    s
+}
+
 fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
     use decoder::DuplicateKeyMode;
+    use decoder::NanInfinityMode;
+    use decoder::OutOfRangeMode;
+    use decoder::UnicodeNormalization;
 
     match decoder.decode_value()? {
         DecodedValue::Null => Ok(Value::Null),
         DecodedValue::Bool(b) => Ok(Value::Bool(b)),
         DecodedValue::Int(n) => Ok(Value::Int(n)),
         DecodedValue::UInt(n) => Ok(Value::UInt(n)),
-        DecodedValue::Float(f) => Ok(Value::Float(f)),
-        DecodedValue::BigNumber(bn) => Ok(Value::BigNumber(bn)),
-        DecodedValue::String(s) => Ok(Value::String(s.to_owned())),
+        DecodedValue::Float(f) => {
+            if decoder.config().nan_infinity_mode == NanInfinityMode::Stringify {
+                if f.is_nan() {
+                    return Ok(Value::String("NaN".into()));
+                }
+                if f == f64::INFINITY {
+                    return Ok(Value::String("Infinity".into()));
+                }
+                if f == f64::NEG_INFINITY {
+                    return Ok(Value::String("-Infinity".into()));
+                }
+            }
+            Ok(Value::Float(f))
+        }
+        DecodedValue::BigNumber(bn) => {
+            if decoder.config().out_of_range_mode == OutOfRangeMode::Stringify {
+                let exp_exceeded = (bn.exponent.unsigned_abs() as usize) > decoder.config().max_bignumber_exponent;
+                // Check magnitude byte count
+                let mag_bytes = if bn.significand == 0 { 0 } else { ((64 - bn.significand.leading_zeros()) as usize + 7) / 8 };
+                let mag_exceeded = mag_bytes > decoder.config().max_bignumber_magnitude;
+                if exp_exceeded || mag_exceeded {
+                    return Ok(Value::String(bn.to_string_notation()));
+                }
+            }
+            Ok(Value::BigNumber(bn))
+        }
+        DecodedValue::String(s) => {
+            let owned = s.into_owned();
+            Ok(Value::String(maybe_nfc_normalize(decoder.config().unicode_normalization, owned)))
+        }
         DecodedValue::ArrayStart => {
             let max_size = decoder.config().max_container_size;
             let mut arr = Vec::new();
@@ -448,7 +496,9 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
                 }
                 let key_value = decoder.decode_value()?;
                 let key = match key_value {
-                    DecodedValue::String(s) => s.to_owned(),
+                    DecodedValue::String(s) => {
+                        maybe_nfc_normalize(decoder.config().unicode_normalization, s.into_owned())
+                    }
                     _ => return Err(Error::ExpectedObjectKey),
                 };
                 let value = decode_value_recursive(decoder)?;

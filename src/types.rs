@@ -344,6 +344,18 @@ impl BigNumber {
     #[must_use] pub fn from_u64(value: u64) -> Self {
         Self::new(1, value, 0)
     }
+
+    /// Format this BigNumber as a string in exponential notation.
+    /// Format: ["-"]<significand>"e"<exponent>
+    /// Examples: "1e6", "-1e6", "15e5", "0e0"
+    #[must_use]
+    pub fn to_string_notation(&self) -> String {
+        if self.significand == 0 {
+            return "0e0".to_string();
+        }
+        let sign = if self.sign < 0 { "-" } else { "" };
+        format!("{}{}e{}", sign, self.significand, self.exponent)
+    }
 }
 
 impl Default for BigNumber {
