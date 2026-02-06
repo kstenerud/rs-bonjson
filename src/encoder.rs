@@ -7,16 +7,10 @@ use crate::types::{type_code, BigNumber, zigzag_encode, leb128_encode, NATIVE_SI
 use std::io::Write;
 
 /// Configuration options for the encoder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EncoderConfig {
     /// Allow NUL characters in strings (default: false)
     pub allow_nul: bool,
-}
-
-impl Default for EncoderConfig {
-    fn default() -> Self {
-        Self { allow_nul: false }
-    }
 }
 
 /// A BONJSON encoder that writes to a byte buffer.

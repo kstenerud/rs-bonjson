@@ -136,7 +136,7 @@ fn parse_decimal_as_bignumber(s: &str) -> Option<serde_bonjson::BigNumber> {
     let s = if negative { &s[1..] } else { s };
 
     // Split at 'e' or 'E'
-    let (mantissa_str, exp_str) = if let Some(e_pos) = s.find(|c: char| c == 'e' || c == 'E') {
+    let (mantissa_str, exp_str) = if let Some(e_pos) = s.find(['e', 'E']) {
         (&s[..e_pos], Some(&s[e_pos + 1..]))
     } else {
         (s, None)
@@ -362,7 +362,7 @@ fn json_to_value_tracked(json: &JsonValue) -> ConvertedValue {
 
 /// Normalize a BigNumber by stripping trailing zeros from significand
 /// and adjusting exponent. Returns (normalized_significand, adjusted_exponent).
-fn normalize_bignumber(sign: i8, significand: u64, exponent: i64) -> (u64, i64) {
+fn normalize_bignumber(_sign: i8, significand: u64, exponent: i64) -> (u64, i64) {
     if significand == 0 {
         return (0, 0);
     }
@@ -972,19 +972,14 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         if let Some(max_mag) = options.get("max_bignumber_magnitude").and_then(|v| v.as_u64()) {
             config.max_bignumber_magnitude = max_mag as usize;
         }
-        if let Some(norm) = options.get("unicode_normalization").and_then(|v| v.as_str()) {
-            match norm {
-                "nfc" => {
-                    #[cfg(feature = "unicode-normalization")]
-                    {
-                        config.unicode_normalization = serde_bonjson::UnicodeNormalization::Nfc;
-                    }
-                    #[cfg(not(feature = "unicode-normalization"))]
-                    {
-                        return Err(format!("{}: skipped (unicode-normalization feature not enabled)", name));
-                    }
-                }
-                _ => {}
+        if let Some("nfc") = options.get("unicode_normalization").and_then(|v| v.as_str()) {
+            #[cfg(feature = "unicode-normalization")]
+            {
+                config.unicode_normalization = serde_bonjson::UnicodeNormalization::Nfc;
+            }
+            #[cfg(not(feature = "unicode-normalization"))]
+            {
+                return Err(format!("{}: skipped (unicode-normalization feature not enabled)", name));
             }
         }
         if let Some(oor) = options.get("out_of_range").and_then(|v| v.as_str()) {

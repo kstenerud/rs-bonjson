@@ -112,6 +112,7 @@ mod optimized {
 
     /// Check if code is in reserved range (0xc9-0xcf or 0xfa-0xff)
     #[inline]
+    #[allow(dead_code)]
     pub const fn is_reserved(code: u8) -> bool {
         // 0xc9-0xcf: code > 0xc8 && code < 0xd0
         // 0xfa-0xff: code > 0xf9

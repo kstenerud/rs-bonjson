@@ -436,7 +436,6 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
     use decoder::DuplicateKeyMode;
     use decoder::NanInfinityMode;
     use decoder::OutOfRangeMode;
-    use decoder::UnicodeNormalization;
 
     match decoder.decode_value()? {
         DecodedValue::Null => Ok(Value::Null),

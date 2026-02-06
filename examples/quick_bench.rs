@@ -240,8 +240,10 @@ fn bench_decode_allow_nul<T: Serialize + for<'de> Deserialize<'de>>(name: &str, 
     let json_bytes = serde_json::to_vec(data).unwrap();
 
     // Config with allow_nul = true (skips NUL byte validation)
-    let mut config = DecoderConfig::default();
-    config.allow_nul = true;
+    let config = DecoderConfig {
+        allow_nul: true,
+        ..Default::default()
+    };
 
     // Warmup
     for _ in 0..100 {

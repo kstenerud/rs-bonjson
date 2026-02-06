@@ -64,7 +64,7 @@ fn create_nested_data() -> Vec<ComplexStruct> {
             id: i as u64,
             name: format!("User {}", i),
             email: format!("user{}@example.com", i),
-            scores: vec![i as i32; 10],
+            scores: vec![i; 10],
             metadata: Metadata {
                 created: "2024-01-15T10:30:00Z".to_string(),
                 updated: "2024-01-18T14:22:33Z".to_string(),

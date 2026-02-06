@@ -690,10 +690,10 @@ impl<'a> Decoder<'a> {
         let exponent = zigzag_decode(exp_raw);
 
         // Check exponent limit
-        if (exponent.unsigned_abs() as usize) > self.config.max_bignumber_exponent {
-            if self.config.out_of_range_mode != OutOfRangeMode::Stringify {
-                return Err(Error::MaxBignumberExponentExceeded);
-            }
+        if (exponent.unsigned_abs() as usize) > self.config.max_bignumber_exponent
+            && self.config.out_of_range_mode != OutOfRangeMode::Stringify
+        {
+            return Err(Error::MaxBignumberExponentExceeded);
         }
 
         // Decode signed_length
@@ -711,10 +711,10 @@ impl<'a> Decoder<'a> {
         let byte_count = signed_length.unsigned_abs() as usize;
 
         // Check magnitude limit (also enforces u64 range since default max is 8)
-        if byte_count > self.config.max_bignumber_magnitude {
-            if self.config.out_of_range_mode != OutOfRangeMode::Stringify {
-                return Err(Error::MaxBignumberMagnitudeExceeded);
-            }
+        if byte_count > self.config.max_bignumber_magnitude
+            && self.config.out_of_range_mode != OutOfRangeMode::Stringify
+        {
+            return Err(Error::MaxBignumberMagnitudeExceeded);
         }
 
         // Hard safety cap for stringify mode, and always enforce u64 range
