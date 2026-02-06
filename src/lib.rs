@@ -155,7 +155,7 @@ mod value_tests;
 // Re-export commonly used items at the crate root
 pub use de::{from_slice, from_slice_with_config, Deserializer};
 pub use decoder::{DecodedValue, Decoder, DecoderConfig, DuplicateKeyMode};
-pub use encoder::Encoder;
+pub use encoder::{Encoder, EncoderConfig};
 pub use error::{Error, Result};
 pub use ser::Serializer;
 pub use types::{limits, type_code, BigNumber};
@@ -503,6 +503,29 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>> {
 /// Returns an error if encoding fails or writing to the writer fails.
 pub fn encode_value_to_writer<W: Write>(writer: W, value: &Value) -> Result<()> {
     let mut encoder = Encoder::new(writer);
+    encode_value_recursive(&mut encoder, value)?;
+    encoder.finish()?;
+    Ok(())
+}
+
+/// Encode a `Value` to BONJSON bytes with the given configuration.
+///
+/// # Errors
+///
+/// Returns an error if encoding fails (e.g., NaN/infinity floats in the value).
+pub fn encode_value_with_config(value: &Value, config: EncoderConfig) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    encode_value_to_writer_with_config(&mut buf, value, config)?;
+    Ok(buf)
+}
+
+/// Encode a `Value` to a writer with the given configuration.
+///
+/// # Errors
+///
+/// Returns an error if encoding fails or writing to the writer fails.
+pub fn encode_value_to_writer_with_config<W: Write>(writer: W, value: &Value, config: EncoderConfig) -> Result<()> {
+    let mut encoder = Encoder::with_config(writer, config);
     encode_value_recursive(&mut encoder, value)?;
     encoder.finish()?;
     Ok(())

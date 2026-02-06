@@ -6,6 +6,19 @@ use crate::error::{Error, Result};
 use crate::types::{type_code, BigNumber, zigzag_encode, leb128_encode, NATIVE_SIZE_INDEX};
 use std::io::Write;
 
+/// Configuration options for the encoder.
+#[derive(Debug, Clone)]
+pub struct EncoderConfig {
+    /// Allow NUL characters in strings (default: false)
+    pub allow_nul: bool,
+}
+
+impl Default for EncoderConfig {
+    fn default() -> Self {
+        Self { allow_nul: false }
+    }
+}
+
 /// A BONJSON encoder that writes to a byte buffer.
 ///
 /// The encoder tracks container state to ensure well-formed output.
@@ -20,6 +33,7 @@ pub struct Encoder<W: Write> {
     writer: W,
     /// Stack of container states: true = object (expecting key/value alternation)
     containers: Vec<ContainerState>,
+    config: EncoderConfig,
 }
 
 #[derive(Clone, Copy)]
@@ -34,6 +48,16 @@ impl<W: Write> Encoder<W> {
         Self {
             writer,
             containers: Vec::new(),
+            config: EncoderConfig::default(),
+        }
+    }
+
+    /// Create a new encoder with the given configuration.
+    pub fn with_config(writer: W, config: EncoderConfig) -> Self {
+        Self {
+            writer,
+            containers: Vec::new(),
+            config,
         }
     }
 
@@ -141,7 +165,7 @@ impl<W: Write> Encoder<W> {
         let bytes = value.as_bytes();
         let len = bytes.len();
 
-        if memchr::memchr(0, bytes).is_some() {
+        if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
             return Err(Error::NulCharacter);
         }
 
@@ -323,7 +347,7 @@ impl<W: Write> Encoder<W> {
         let bytes = value.as_bytes();
         let len = bytes.len();
 
-        if memchr::memchr(0, bytes).is_some() {
+        if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
             return Err(Error::NulCharacter);
         }
 

@@ -758,10 +758,12 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
     }
 
     // Check for options
+    let mut encoder_config = serde_bonjson::EncoderConfig::default();
     let config = if let Some(options) = test.get("options") {
         let mut config = DecoderConfig::default();
         if let Some(allow_nul) = options.get("allow_nul").and_then(|v| v.as_bool()) {
             config.allow_nul = allow_nul;
+            encoder_config.allow_nul = allow_nul;
         }
         // Handle nan_infinity_behavior option (can be "allow", "stringify", or "reject")
         if let Some(nan_inf) = options.get("nan_infinity_behavior").and_then(|v| v.as_str()) {
@@ -838,7 +840,7 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
                 return Err(format!("{}: skipped (NaN/Infinity in input)", name));
             }
 
-            match encode_value(&input) {
+            match serde_bonjson::encode_value_with_config(&input, encoder_config) {
                 Ok(actual_bytes) => {
                     if actual_bytes == expected_bytes {
                         Ok(())
