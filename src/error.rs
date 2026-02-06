@@ -38,11 +38,11 @@ pub enum Error {
     UnclosedContainer,
 
     /// NaN value encountered where not allowed.
-    /// Test spec: "nan_not_allowed"
+    /// Test spec: "invalid_data"
     NanNotAllowed,
 
     /// Infinity value encountered where not allowed.
-    /// Test spec: "infinity_not_allowed"
+    /// Test spec: "invalid_data"
     InfinityNotAllowed,
 
     /// Generic invalid data (e.g., invalid BigNumber).
@@ -73,6 +73,14 @@ pub enum Error {
     /// Test spec: "max_document_size_exceeded"
     MaxDocumentSizeExceeded,
 
+    /// BigNumber exponent exceeds configured limit.
+    /// Test spec: "max_bignumber_exponent_exceeded"
+    MaxBignumberExponentExceeded,
+
+    /// BigNumber magnitude exceeds configured limit.
+    /// Test spec: "max_bignumber_magnitude_exceeded"
+    MaxBignumberMagnitudeExceeded,
+
     /// Tried to close more containers than were opened.
     UnbalancedContainers,
 
@@ -100,8 +108,8 @@ impl Error {
             Error::NulCharacter => "nul_character",
             Error::DuplicateKey => "duplicate_key",
             Error::UnclosedContainer => "unclosed_container",
-            Error::NanNotAllowed => "nan_not_allowed",
-            Error::InfinityNotAllowed => "infinity_not_allowed",
+            Error::NanNotAllowed => "invalid_data",
+            Error::InfinityNotAllowed => "invalid_data",
             Error::InvalidData(_) => "invalid_data",
             Error::InvalidObjectKey => "invalid_object_key",
             Error::ValueOutOfRange => "value_out_of_range",
@@ -109,6 +117,8 @@ impl Error {
             Error::MaxStringLengthExceeded => "max_string_length_exceeded",
             Error::MaxContainerSizeExceeded => "max_container_size_exceeded",
             Error::MaxDocumentSizeExceeded => "max_document_size_exceeded",
+            Error::MaxBignumberExponentExceeded => "max_bignumber_exponent_exceeded",
+            Error::MaxBignumberMagnitudeExceeded => "max_bignumber_magnitude_exceeded",
             Error::UnbalancedContainers => "unbalanced_containers",
             Error::ExpectedObjectKey => "expected_object_key",
             Error::ExpectedObjectValue => "expected_object_value",
@@ -137,6 +147,8 @@ impl fmt::Display for Error {
             Error::MaxStringLengthExceeded => write!(f, "maximum string length exceeded"),
             Error::MaxContainerSizeExceeded => write!(f, "maximum container size exceeded"),
             Error::MaxDocumentSizeExceeded => write!(f, "maximum document size exceeded"),
+            Error::MaxBignumberExponentExceeded => write!(f, "BigNumber exponent exceeds limit"),
+            Error::MaxBignumberMagnitudeExceeded => write!(f, "BigNumber magnitude exceeds limit"),
             Error::UnbalancedContainers => write!(f, "tried to close too many containers"),
             Error::ExpectedObjectKey => write!(f, "expected object key (string)"),
             Error::ExpectedObjectValue => write!(f, "expected object value"),

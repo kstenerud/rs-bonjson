@@ -59,7 +59,7 @@ fn parse_number_marker(s: &str) -> Value {
 
     // Handle special values
     match s.to_lowercase().as_str() {
-        "nan" => return Value::Float(f64::NAN),
+        "nan" | "snan" => return Value::Float(f64::NAN),
         "infinity" => return Value::Float(f64::INFINITY),
         "-infinity" => return Value::Float(f64::NEG_INFINITY),
         _ => {}
@@ -628,7 +628,7 @@ fn validate_number_marker(s: &str) -> Result<(), ValidationError> {
 
     // Special values are always valid
     match s.to_lowercase().as_str() {
-        "nan" | "infinity" | "-infinity" => return Ok(()),
+        "nan" | "snan" | "infinity" | "-infinity" => return Ok(()),
         _ => {}
     }
 
@@ -727,11 +727,8 @@ fn validate_number_markers(value: &JsonValue) -> Result<(), ValidationError> {
 
 /// Features this implementation supports.
 const SUPPORTED_FEATURES: &[&str] = &[
-    // Add features here as we implement them:
-    // "arbitrary_precision_bignumber",
-    // "duplicate_key_detection",
-    // "nan_infinity_handling",
-    // "invalid_utf8_handling",
+    "int64",
+    "encode_nul_rejection",
 ];
 
 /// Check if this test requires unsupported features.
@@ -810,6 +807,20 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         }
         if let Some(max_doc) = options.get("max_document_size").and_then(|v| v.as_u64()) {
             config.max_document_size = max_doc as usize;
+        }
+        if let Some(max_exp) = options.get("max_bignumber_exponent").and_then(|v| v.as_u64()) {
+            config.max_bignumber_exponent = max_exp as usize;
+        }
+        if let Some(max_mag) = options.get("max_bignumber_magnitude").and_then(|v| v.as_u64()) {
+            config.max_bignumber_magnitude = max_mag as usize;
+        }
+        // Handle unicode_normalization option (not implemented - skip)
+        if let Some(_norm) = options.get("unicode_normalization").and_then(|v| v.as_str()) {
+            return Err(format!("{}: skipped (unicode_normalization not implemented)", name));
+        }
+        // Handle out_of_range option (not implemented - skip)
+        if let Some(_oor) = options.get("out_of_range").and_then(|v| v.as_str()) {
+            return Err(format!("{}: skipped (out_of_range not implemented)", name));
         }
         config
     } else {

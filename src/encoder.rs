@@ -141,6 +141,10 @@ impl<W: Write> Encoder<W> {
         let bytes = value.as_bytes();
         let len = bytes.len();
 
+        if memchr::memchr(0, bytes).is_some() {
+            return Err(Error::NulCharacter);
+        }
+
         if len <= 15 {
             self.write_byte(type_code::STRING0 + len as u8)?;
             self.write_bytes(bytes)?;
@@ -318,6 +322,10 @@ impl<W: Write> Encoder<W> {
     pub fn write_str(&mut self, value: &str) -> Result<()> {
         let bytes = value.as_bytes();
         let len = bytes.len();
+
+        if memchr::memchr(0, bytes).is_some() {
+            return Err(Error::NulCharacter);
+        }
 
         if len <= 15 {
             self.write_byte(type_code::STRING0 + len as u8)?;

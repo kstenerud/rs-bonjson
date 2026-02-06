@@ -120,7 +120,7 @@ The project uses a layered architecture:
 - `try_consume_container_end()` checks for 0xFE delimiter and pops container state
 - Serde path uses unchecked methods that skip container state tracking
 - Branchless sign extension for signed integer decoding (arithmetic right shift)
-- Uses `memchr` for NUL byte detection in both short and long strings
+- Uses `memchr` for NUL byte detection in both short and long strings (decoder and encoder)
 - Inline hints on hot paths
 
 #### Type Code Dispatch (types.rs)
@@ -139,7 +139,9 @@ with a single mask operation, then determines sign with `int_is_signed()`.
 
 ### Known Limitations
 - BigNumber significands limited to i64 range
-- NaN/Infinity stringify mode not implemented (but NaN/Infinity rejection uses spec-compliant `nan_not_allowed` / `infinity_not_allowed` error types)
+- NaN/Infinity stringify mode not implemented (NaN/Infinity rejection returns `invalid_data` error type per spec)
+- Unicode normalization (NFC) not implemented
+- Out-of-range BigNumber stringify mode not implemented
 - Invalid UTF-8 replace/delete modes not implemented
 
 ### Performance Considerations

@@ -365,6 +365,12 @@ pub mod limits {
 
     /// Maximum string length in bytes
     pub const MAX_STRING_LENGTH: usize = 10_000_000;
+
+    /// Maximum BigNumber exponent (absolute value)
+    pub const MAX_BIGNUMBER_EXPONENT: usize = 1_000_000;
+
+    /// Maximum BigNumber magnitude in bytes
+    pub const MAX_BIGNUMBER_MAGNITUDE: usize = 8;
 }
 
 #[cfg(test)]

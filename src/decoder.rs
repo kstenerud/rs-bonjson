@@ -58,6 +58,10 @@ pub struct DecoderConfig {
     pub max_string_length: usize,
     /// Maximum document size in bytes
     pub max_document_size: usize,
+    /// Maximum BigNumber exponent (absolute value)
+    pub max_bignumber_exponent: usize,
+    /// Maximum BigNumber magnitude in bytes
+    pub max_bignumber_magnitude: usize,
 }
 
 impl Default for DecoderConfig {
@@ -71,6 +75,8 @@ impl Default for DecoderConfig {
             max_container_size: limits::MAX_CONTAINER_SIZE,
             max_string_length: limits::MAX_STRING_LENGTH,
             max_document_size: limits::MAX_DOCUMENT_SIZE,
+            max_bignumber_exponent: limits::MAX_BIGNUMBER_EXPONENT,
+            max_bignumber_magnitude: limits::MAX_BIGNUMBER_MAGNITUDE,
         }
     }
 }
@@ -524,6 +530,11 @@ impl<'a> Decoder<'a> {
         self.pos += exp_consumed;
         let exponent = zigzag_decode(exp_raw);
 
+        // Check exponent limit
+        if (exponent.unsigned_abs() as usize) > self.config.max_bignumber_exponent {
+            return Err(Error::MaxBignumberExponentExceeded);
+        }
+
         // Decode signed_length
         let remaining = &self.data[self.pos..];
         let (slen_raw, slen_consumed) = leb128_decode(remaining)
@@ -537,6 +548,11 @@ impl<'a> Decoder<'a> {
 
         let sign: i8 = if signed_length < 0 { -1 } else { 1 };
         let byte_count = signed_length.unsigned_abs() as usize;
+
+        // Check magnitude limit (also enforces u64 range since default max is 8)
+        if byte_count > self.config.max_bignumber_magnitude {
+            return Err(Error::MaxBignumberMagnitudeExceeded);
+        }
 
         if byte_count > 8 {
             return Err(Error::InvalidData(
