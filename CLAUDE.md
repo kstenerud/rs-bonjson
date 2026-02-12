@@ -53,6 +53,7 @@ The project uses a layered architecture:
 - Delimiter-terminated containers (B7/B8 start, B6 end)
 - Short strings up to 66 bytes inline, FF-terminated long strings (FF + payload + FF)
 - Methods: `write_record_definition()`, `begin_record_instance()`, `write_typed_array_raw()`
+- Encoding-size helpers: `signed_int_encoding_size()`, `unsigned_int_encoding_size()`, `float_encoding_size()` — compute encoded size without writing, used by serde typed array size comparison
 
 ### decoder.rs
 - `Decoder<'a>` - zero-copy decoder that borrows from input slice
@@ -77,20 +78,34 @@ The project uses a layered architecture:
 - Accessor methods (as_str, as_i64, get_key, get_index, etc.)
 
 ### ser.rs
-- `Serializer<'a, W>` - serde Serializer implementation
-- Wraps the low-level `Encoder`
-- Handles all serde data model types
+- `Serializer<'a, W>` - serde Serializer implementation wrapping the low-level `Encoder`
+- `SerializerConfig` with `typed_arrays` (default: true) and `records` (default: false)
+- `BufferedSeqSerializer` — probes sequences for typed array optimization:
+  - Buffers elements, tracking element kind and raw LE bytes
+  - At `end()`, compares typed array size vs regular array size, emits smaller one
+  - Falls back to regular streaming on type mismatch or non-numeric elements
+  - Uses `SeqElementSerializer` to capture individual elements without writing
+  - `NoOpCompound` absorbs compound-type children during probing
+- `StructSerializer` enum — `Regular` (key+value) or `Record` (value only, keys from definition)
+- `CountingSerializer` — no-output first pass for record detection, counts struct name occurrences
+- `serialize_bytes` emits `TYPED_ARRAY_UINT8` instead of regular array
+- Tuples always use regular arrays (heterogeneous by nature)
 
 ### de.rs
 - `Deserializer<'a>` - serde Deserializer implementation
 - Wraps the low-level `Decoder`
 - Zero-copy string deserialization when possible
+- `deserialize_struct` handles both OBJECT and RECORD_INSTANCE transparently
 
 ### lib.rs
-- Public API functions: `to_vec`, `to_writer`, `from_slice`, `from_slice_with_config`
+- Public API: `to_vec`, `to_writer`, `to_vec_with_config`, `to_writer_with_config`
+- `to_writer_with_config` implements two-pass record detection when `config.records` is true:
+  1. Run `CountingSerializer` → collect struct types appearing 2+ times
+  2. Write record definitions via encoder, then serialize with record instances
+- Deserialization: `from_slice`, `from_slice_with_config`
 - Value-based API: `encode_value`, `decode_value`, `decode_value_with_config`
 - Recursive value decoding with duplicate key detection and container size limits
-- Re-exports commonly used types
+- Re-exports commonly used types including `SerializerConfig`
 
 ## Key Design Decisions
 
@@ -117,10 +132,10 @@ The project uses a layered architecture:
 | FF | Long string start/terminator |
 
 ### Record Types
-Record definitions (`0xB9`) define key-set templates before the root value. Record instances (`0xBA`) reference a definition by LEB128 index. During encoding (Value API), the encoder performs a two-pass scan: collect key sets that appear 2+ times, emit definitions, then encode objects matching those key sets as record instances. The serde streaming path always uses regular objects (no buffering). During decoding, record instances are transparently expanded into objects.
+Record definitions (`0xB9`) define key-set templates before the root value. Record instances (`0xBA`) reference a definition by LEB128 index. During encoding (Value API), the encoder performs a two-pass scan: collect key sets that appear 2+ times, emit definitions, then encode objects matching those key sets as record instances. The serde path also supports records when `SerializerConfig::records` is true — it uses `CountingSerializer` for a lightweight first pass to count struct types, then emits definitions and instances for types appearing 2+ times. During decoding, record instances are transparently expanded into objects (both `deserialize_any` and `deserialize_struct` handle them).
 
 ### Typed Arrays
-Typed arrays (`0xF5-0xFE`) are length-prefixed homogeneous numeric arrays. 10 element types: float64, float32, sint64/32/16/8, uint64/32/16/8. During encoding (Value API), the encoder auto-detects homogeneous numeric `Value::Array`s and emits typed arrays. The serde streaming path always uses regular arrays. During decoding, typed arrays are transparently expanded into individual values.
+Typed arrays (`0xF5-0xFE`) are length-prefixed homogeneous numeric arrays. 10 element types: float64, float32, sint64/32/16/8, uint64/32/16/8. During encoding (Value API), the encoder auto-detects homogeneous numeric `Value::Array`s and emits typed arrays. The serde path also supports typed arrays by default (`SerializerConfig::typed_arrays`): `BufferedSeqSerializer` probes sequence elements, buffers raw LE bytes, and at `end()` compares typed vs regular size to emit the smaller encoding. `serialize_bytes` always emits `TYPED_ARRAY_UINT8`. During decoding, typed arrays are transparently expanded into individual values.
 
 ### Performance Optimizations
 

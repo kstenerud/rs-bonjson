@@ -193,6 +193,38 @@ impl<W: Write> Encoder<W> {
         self.write_byte(type_code::CONTAINER_END)
     }
 
+    /// Write a typed array with raw bytes without state checks.
+    #[inline]
+    pub(crate) fn write_typed_array_raw_unchecked(
+        &mut self,
+        type_code_byte: u8,
+        count: usize,
+        data: &[u8],
+    ) -> Result<()> {
+        self.write_byte(type_code_byte)?;
+        let mut buf = [0u8; 10];
+        let n = leb128_encode(count as u64, &mut buf);
+        self.write_bytes(&buf[..n])?;
+        self.write_bytes(data)
+    }
+
+    /// Write a record definition without state checks.
+    pub(crate) fn write_record_definition_unchecked(&mut self, keys: &[&str]) -> Result<()> {
+        self.write_byte(type_code::RECORD_DEF)?;
+        for key in keys {
+            self.write_str_unchecked(key)?;
+        }
+        self.write_byte(type_code::CONTAINER_END)
+    }
+
+    /// Begin a record instance without state checks.
+    pub(crate) fn begin_record_instance_unchecked(&mut self, def_index: usize) -> Result<()> {
+        self.write_byte(type_code::RECORD_INSTANCE)?;
+        let mut buf = [0u8; 10];
+        let n = leb128_encode(def_index as u64, &mut buf);
+        self.write_bytes(&buf[..n])
+    }
+
     /// Write a single byte.
     #[inline]
     fn write_byte(&mut self, byte: u8) -> Result<()> {
@@ -583,6 +615,83 @@ fn required_signed_bytes_min1(value: i64) -> usize {
     // We need at least one sign bit, so subtract 1 from redundant count
     let significant_bits = 64 - redundant + 1;
     (significant_bits + 7) / 8
+}
+
+// =============================================================================
+// Encoding-size helper functions
+// =============================================================================
+
+/// Compute the encoded size of a signed integer (without writing anything).
+/// Returns the number of bytes the encoder would produce for `write_signed_int`.
+#[allow(clippy::cast_sign_loss)]
+pub fn signed_int_encoding_size(value: i64) -> usize {
+    if (0..=100).contains(&value) {
+        return 1; // small int
+    }
+    let min_bytes = required_signed_bytes_min1(value);
+    let native_index = NATIVE_SIZE_INDEX[min_bytes - 1];
+    let native_bytes = 1usize << (native_index as usize);
+
+    // Check if unsigned encoding is smaller for positive values
+    if value > 0 {
+        let unsigned_min = required_unsigned_bytes_min1(value as u64);
+        let unsigned_native_index = NATIVE_SIZE_INDEX[unsigned_min - 1];
+        let unsigned_native_bytes = 1usize << (unsigned_native_index as usize);
+        if unsigned_native_bytes < native_bytes {
+            return 1 + unsigned_native_bytes; // type code + payload
+        }
+    }
+
+    1 + native_bytes // type code + payload
+}
+
+/// Compute the encoded size of an unsigned integer (without writing anything).
+/// Returns the number of bytes the encoder would produce for `write_unsigned_int`.
+pub fn unsigned_int_encoding_size(value: u64) -> usize {
+    if value <= 100 {
+        return 1; // small int
+    }
+    let min_bytes = required_unsigned_bytes_min1(value);
+    let native_index = NATIVE_SIZE_INDEX[min_bytes - 1];
+    let native_bytes = 1usize << (native_index as usize);
+    1 + native_bytes // type code + payload
+}
+
+/// Compute the encoded size of a float64 (without writing anything).
+/// Mirrors the logic in `write_f64_unchecked` including integer and f32 optimization.
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_precision_loss)]
+pub fn float_encoding_size(value: f64) -> usize {
+    // NaN/Infinity would error, but for size estimation we still return a size
+    if value.is_nan() || value.is_infinite() {
+        return 9; // f64 encoding
+    }
+
+    // Negative zero: always float
+    if value == 0.0 && value.is_sign_negative() {
+        return float_only_encoding_size(value);
+    }
+
+    // Try integer
+    let as_int = value as i64;
+    #[allow(clippy::float_cmp)]
+    if (as_int as f64) == value {
+        return signed_int_encoding_size(as_int);
+    }
+
+    float_only_encoding_size(value)
+}
+
+/// Compute the encoded size for a value that will definitely be encoded as a float.
+#[allow(clippy::cast_possible_truncation)]
+fn float_only_encoding_size(value: f64) -> usize {
+    let f32_val = value as f32;
+    #[allow(clippy::float_cmp)]
+    if f64::from(f32_val) == value {
+        5 // type code + 4 bytes
+    } else {
+        9 // type code + 8 bytes
+    }
 }
 
 // =============================================================================

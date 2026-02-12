@@ -157,7 +157,7 @@ pub use de::{from_slice, from_slice_with_config, Deserializer};
 pub use decoder::{DecodedValue, Decoder, DecoderConfig, DuplicateKeyMode, InvalidUtf8Mode, NanInfinityMode, OutOfRangeMode, UnicodeNormalization};
 pub use encoder::{Encoder, EncoderConfig};
 pub use error::{Error, Result};
-pub use ser::Serializer;
+pub use ser::{Serializer, SerializerConfig};
 pub use types::{limits, type_code, BigNumber};
 pub use value::Value;
 
@@ -173,6 +173,8 @@ use std::io::{Read, Write};
 
 /// Serialize a value to a BONJSON byte vector.
 ///
+/// Uses the default [`SerializerConfig`] (typed arrays enabled, records disabled).
+///
 /// # Example
 ///
 /// ```rust
@@ -180,20 +182,6 @@ use std::io::{Read, Write};
 ///
 /// let bytes = to_vec(&42i32).unwrap();
 /// assert_eq!(bytes, vec![0x2a]); // Small integer 42 (type_code = 42 = 0x2a)
-/// ```
-///
-/// # Performance Note
-///
-/// This function pre-allocates 128 bytes, which is a reasonable default for
-/// small-to-medium payloads. For large values where you can estimate the
-/// serialized size, use [`to_writer`] with a pre-sized `Vec` for better performance:
-///
-/// ```rust
-/// use serde_bonjson::to_writer;
-///
-/// let large_data = vec![0i32; 10000];
-/// let mut buf = Vec::with_capacity(large_data.len() * 2); // Estimate ~2 bytes per element
-/// to_writer(&mut buf, &large_data).unwrap();
 /// ```
 ///
 /// # Errors
@@ -205,7 +193,20 @@ pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Serialize a value to a BONJSON byte vector with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if serialization fails (e.g., NaN/infinity floats).
+pub fn to_vec_with_config<T: Serialize>(value: &T, config: &SerializerConfig) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(128);
+    to_writer_with_config(&mut buf, value, config)?;
+    Ok(buf)
+}
+
 /// Serialize a value to a writer.
+///
+/// Uses the default [`SerializerConfig`] (typed arrays enabled, records disabled).
 ///
 /// # Example
 ///
@@ -216,31 +217,67 @@ pub fn to_vec<T: Serialize>(value: &T) -> Result<Vec<u8>> {
 /// to_writer(&mut buf, &"hello").unwrap();
 /// ```
 ///
-/// # Performance Note
-///
-/// The encoder writes small chunks (often single bytes) directly to the writer.
-/// For file or network I/O, wrap your writer in [`std::io::BufWriter`] to avoid
-/// excessive syscall overhead:
-///
-/// ```rust
-/// use std::io::BufWriter;
-/// use std::fs::File;
-/// use serde_bonjson::to_writer;
-///
-/// let file = File::create("data.bonjson").unwrap();
-/// let buffered = BufWriter::new(file);
-/// to_writer(buffered, &42i32).unwrap();
-/// ```
-///
-/// For in-memory writers like `Vec<u8>`, no buffering is needed.
-///
 /// # Errors
 ///
 /// Returns an error if serialization fails or writing to the writer fails.
 pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
+    to_writer_with_config(writer, value, &SerializerConfig::default())
+}
+
+/// Serialize a value to a writer with custom configuration.
+///
+/// When `config.records` is true, this performs a two-pass traversal:
+/// 1. Count struct types (lightweight, no I/O)
+/// 2. Emit record definitions for types appearing 2+ times, then serialize
+///
+/// # Errors
+///
+/// Returns an error if serialization fails or writing to the writer fails.
+pub fn to_writer_with_config<W: Write, T: Serialize>(
+    writer: W,
+    value: &T,
+    config: &SerializerConfig,
+) -> Result<()> {
+    use ser::CountingSerializer;
+    use std::collections::HashMap;
+
     let mut encoder = Encoder::new(writer);
+
+    // If records are enabled, run the counting pass first
+    let record_defs = if config.records {
+        let mut counter = CountingSerializer::new();
+        value.serialize(&mut counter)?;
+
+        // Filter to structs appearing 2+ times
+        let qualifying: Vec<(&'static str, Vec<&'static str>)> = counter
+            .struct_counts
+            .into_iter()
+            .filter(|(_, (_, count))| *count >= 2)
+            .map(|(name, (keys, _))| (name, keys))
+            .collect();
+
+        if qualifying.is_empty() {
+            None
+        } else {
+            // Sort for deterministic output
+            let mut sorted = qualifying;
+            sorted.sort_by_key(|(name, _)| *name);
+
+            // Write record definitions and build the lookup map
+            let mut defs = HashMap::new();
+            for (def_index, (name, keys)) in sorted.iter().enumerate() {
+                let key_refs: Vec<&str> = keys.to_vec();
+                encoder.write_record_definition_unchecked(&key_refs)?;
+                defs.insert(*name, (keys.clone(), def_index));
+            }
+            Some(defs)
+        }
+    } else {
+        None
+    };
+
     {
-        let mut serializer = Serializer::new(&mut encoder);
+        let mut serializer = Serializer::with_config(&mut encoder, config.clone(), record_defs);
         value.serialize(&mut serializer)?;
     }
     encoder.finish()?;

@@ -287,9 +287,22 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
         _fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value> {
-        self.decoder.expect_object_start()?;
-        let map = MapDeserializer::new(self);
-        visitor.visit_map(map)
+        let tc = self.decoder.peek_type_code()?;
+        if tc == crate::types::type_code::RECORD_INSTANCE {
+            // Consume the type code and read the definition index
+            match self.decoder.decode_value_unchecked()? {
+                DecodedValue::RecordInstanceStart(def_index) => {
+                    let keys = self.decoder.record_definitions()[def_index].clone();
+                    let map = RecordMapDeserializer::new(self, keys);
+                    visitor.visit_map(map)
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            self.decoder.expect_object_start()?;
+            let map = MapDeserializer::new(self);
+            visitor.visit_map(map)
+        }
     }
 
     fn deserialize_enum<V: Visitor<'de>>(
