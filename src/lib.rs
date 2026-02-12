@@ -179,7 +179,7 @@ use std::io::{Read, Write};
 /// use serde_bonjson::to_vec;
 ///
 /// let bytes = to_vec(&42i32).unwrap();
-/// assert_eq!(bytes, vec![0x8e]); // Small integer 42 (type_code = 42 + 100 = 142 = 0x8e)
+/// assert_eq!(bytes, vec![0x2a]); // Small integer 42 (type_code = 42 = 0x2a)
 /// ```
 ///
 /// # Performance Note
@@ -255,7 +255,7 @@ pub fn to_writer<W: Write, T: Serialize>(writer: W, value: &T) -> Result<()> {
 /// use serde_bonjson::from_reader;
 /// use std::io::Cursor;
 ///
-/// let data = Cursor::new(vec![0x8e]); // Small integer 42 (type_code = 42 + 100 = 142 = 0x8e)
+/// let data = Cursor::new(vec![0x2a]); // Small integer 42 (type_code = 42 = 0x2a)
 /// let value: i32 = from_reader(data).unwrap();
 /// assert_eq!(value, 42);
 /// ```
@@ -378,8 +378,8 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
 /// ```rust
 /// use serde_bonjson::{decode_value, Value};
 ///
-/// // [1, 2, 3]: array start (0xfc) + elements + end marker (0xfe)
-/// let bytes = vec![0xfc, 0x65, 0x66, 0x67, 0xfe];
+/// // [1, 2, 3]: array start (0xb7) + elements + end marker (0xb6)
+/// let bytes = vec![0xb7, 0x01, 0x02, 0x03, 0xb6];
 /// let value = decode_value(&bytes).unwrap();
 /// assert!(value.is_array());
 /// ```
@@ -393,6 +393,7 @@ pub fn from_value<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T> {
 pub fn decode_value(data: &[u8]) -> Result<Value> {
     let mut decoder = Decoder::new(data);
     decoder.check_document_size()?;
+    decoder.read_record_definitions()?;
     let value = decode_value_recursive(&mut decoder)?;
     decoder.finish()?;
     Ok(value)
@@ -409,6 +410,7 @@ pub fn decode_value(data: &[u8]) -> Result<Value> {
 pub fn decode_value_with_config(data: &[u8], config: DecoderConfig) -> Result<Value> {
     let mut decoder = Decoder::with_config(data, config);
     decoder.check_document_size()?;
+    decoder.read_record_definitions()?;
     let value = decode_value_recursive(&mut decoder)?;
     decoder.finish()?;
     Ok(value)
@@ -520,6 +522,80 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
             decoder.end_container()?;
             Ok(Value::Object(map))
         }
+        DecodedValue::RecordInstanceStart(def_index) => {
+            let keys = decoder.record_definitions()[def_index].clone();
+            let dup_mode = decoder.config().duplicate_key_mode;
+            let max_size = decoder.config().max_container_size;
+            let mut map = std::collections::BTreeMap::new();
+            let mut value_count: usize = 0;
+
+            while !decoder.is_at_container_end()? {
+                if value_count >= keys.len() {
+                    return Err(Error::InvalidData(
+                        "record instance has more values than keys".into(),
+                    ));
+                }
+                if value_count >= max_size {
+                    return Err(Error::MaxContainerSizeExceeded);
+                }
+                let key = maybe_nfc_normalize(
+                    decoder.config().unicode_normalization,
+                    keys[value_count].clone(),
+                );
+                let value = decode_value_recursive(decoder)?;
+                if map.contains_key(&key) {
+                    match dup_mode {
+                        DuplicateKeyMode::Error => return Err(Error::DuplicateKey),
+                        DuplicateKeyMode::KeepFirst => {
+                            value_count += 1;
+                            continue;
+                        }
+                        DuplicateKeyMode::KeepLast => {}
+                    }
+                }
+                map.insert(key, value);
+                value_count += 1;
+            }
+            decoder.end_container()?;
+            // Remaining keys get Value::Null
+            for key in keys.iter().skip(value_count) {
+                let key = maybe_nfc_normalize(
+                    decoder.config().unicode_normalization,
+                    key.clone(),
+                );
+                map.entry(key).or_insert(Value::Null);
+            }
+            Ok(Value::Object(map))
+        }
+        DecodedValue::TypedArrayStart { element_type_code, count } => {
+            let mut arr = Vec::with_capacity(count);
+            for _ in 0..count {
+                let elem = decoder.read_typed_array_element(element_type_code)?;
+                let value = match elem {
+                    DecodedValue::Int(n) => Value::Int(n),
+                    DecodedValue::UInt(n) => Value::UInt(n),
+                    DecodedValue::Float(f) => {
+                        if decoder.config().nan_infinity_mode == NanInfinityMode::Stringify {
+                            if f.is_nan() {
+                                Value::String("NaN".into())
+                            } else if f == f64::INFINITY {
+                                Value::String("Infinity".into())
+                            } else if f == f64::NEG_INFINITY {
+                                Value::String("-Infinity".into())
+                            } else {
+                                Value::Float(f)
+                            }
+                        } else {
+                            Value::Float(f)
+                        }
+                    }
+                    _ => unreachable!("typed array element must be numeric"),
+                };
+                arr.push(value);
+            }
+            decoder.end_typed_array()?;
+            Ok(Value::Array(arr))
+        }
         DecodedValue::ContainerEnd => Err(Error::UnbalancedContainers),
     }
 }
@@ -533,7 +609,7 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
 ///
 /// let value = Value::Int(42);
 /// let bytes = encode_value(&value).unwrap();
-/// assert_eq!(bytes, vec![0x8e]); // 42 + 100 = 142 = 0x8e
+/// assert_eq!(bytes, vec![0x2a]); // 42 = 0x2a
 /// ```
 ///
 /// # Errors
@@ -552,7 +628,7 @@ pub fn encode_value(value: &Value) -> Result<Vec<u8>> {
 /// Returns an error if encoding fails or writing to the writer fails.
 pub fn encode_value_to_writer<W: Write>(writer: W, value: &Value) -> Result<()> {
     let mut encoder = Encoder::new(writer);
-    encode_value_recursive(&mut encoder, value)?;
+    encode_value_with_records(&mut encoder, value)?;
     encoder.finish()?;
     Ok(())
 }
@@ -575,12 +651,257 @@ pub fn encode_value_with_config(value: &Value, config: EncoderConfig) -> Result<
 /// Returns an error if encoding fails or writing to the writer fails.
 pub fn encode_value_to_writer_with_config<W: Write>(writer: W, value: &Value, config: EncoderConfig) -> Result<()> {
     let mut encoder = Encoder::with_config(writer, config);
-    encode_value_recursive(&mut encoder, value)?;
+    encode_value_with_records(&mut encoder, value)?;
     encoder.finish()?;
     Ok(())
 }
 
+/// Encode a value with automatic record definition detection.
+fn encode_value_with_records<W: Write>(encoder: &mut Encoder<W>, value: &Value) -> Result<()> {
+    // Collect record definitions (key sets appearing 2+ times)
+    let defs = collect_record_definitions(value);
+
+    if defs.is_empty() {
+        // No records to emit, use simple path
+        return encode_value_recursive(encoder, value);
+    }
+
+    // Build index map
+    let def_index_map: std::collections::HashMap<Vec<String>, usize> = defs
+        .iter()
+        .enumerate()
+        .map(|(i, keys)| (keys.clone(), i))
+        .collect();
+
+    // Write record definitions
+    for def in &defs {
+        let key_refs: Vec<&str> = def.iter().map(|s| s.as_str()).collect();
+        encoder.write_record_definition(&key_refs)?;
+    }
+
+    // Encode values using record instances where applicable
+    encode_value_recursive_inner(encoder, value, &defs, &def_index_map)
+}
+
+/// Detect if an array can be encoded as a typed array and return the type code if so.
+fn detect_typed_array(arr: &[Value]) -> Option<u8> {
+    use crate::types::type_code as tc;
+    if arr.is_empty() {
+        return None;
+    }
+
+    // Check what numeric types are present
+    let mut all_int = true;
+    let mut all_uint = true;
+    let mut all_float = true;
+    let mut max_unsigned: u64 = 0;
+    let mut min_signed: i64 = 0;
+    let mut max_signed: i64 = 0;
+    let mut needs_f64 = false;
+
+    for v in arr {
+        match v {
+            Value::Int(n) => {
+                all_float = false;
+                if *n < 0 {
+                    all_uint = false;
+                    if *n < min_signed {
+                        min_signed = *n;
+                    }
+                }
+                if *n > max_signed {
+                    max_signed = *n;
+                }
+                if *n >= 0 && (*n as u64) > max_unsigned {
+                    #[allow(clippy::cast_sign_loss)]
+                    {
+                        max_unsigned = *n as u64;
+                    }
+                }
+            }
+            Value::UInt(n) => {
+                all_float = false;
+                all_int = false;
+                if *n > max_unsigned {
+                    max_unsigned = *n;
+                }
+            }
+            Value::Float(f) => {
+                all_int = false;
+                all_uint = false;
+                if !f.is_finite() {
+                    return None; // Can't use typed arrays for NaN/Infinity
+                }
+                // Check if f32 suffices
+                #[allow(clippy::cast_possible_truncation)]
+                let as_f32 = *f as f32;
+                #[allow(clippy::float_cmp)]
+                if f64::from(as_f32) != *f {
+                    needs_f64 = true;
+                }
+            }
+            _ => return None, // Non-numeric element
+        }
+    }
+
+    if all_float {
+        return Some(if needs_f64 { tc::TYPED_ARRAY_FLOAT64 } else { tc::TYPED_ARRAY_FLOAT32 });
+    }
+
+    if all_int {
+        // All Value::Int — use signed types to preserve round-trip fidelity
+        if min_signed >= i8::MIN as i64 && max_signed <= i8::MAX as i64 {
+            return Some(tc::TYPED_ARRAY_SINT8);
+        }
+        if min_signed >= i16::MIN as i64 && max_signed <= i16::MAX as i64 {
+            return Some(tc::TYPED_ARRAY_SINT16);
+        }
+        if min_signed >= i32::MIN as i64 && max_signed <= i32::MAX as i64 {
+            return Some(tc::TYPED_ARRAY_SINT32);
+        }
+        return Some(tc::TYPED_ARRAY_SINT64);
+    }
+
+    if all_uint {
+        // All Value::UInt — use unsigned types
+        let effective_max = max_unsigned;
+        if effective_max <= u8::MAX as u64 {
+            return Some(tc::TYPED_ARRAY_UINT8);
+        }
+        if effective_max <= u16::MAX as u64 {
+            return Some(tc::TYPED_ARRAY_UINT16);
+        }
+        if effective_max <= u32::MAX as u64 {
+            return Some(tc::TYPED_ARRAY_UINT32);
+        }
+        return Some(tc::TYPED_ARRAY_UINT64);
+    }
+
+    None
+}
+
+/// Encode values into a typed array byte buffer.
+fn encode_typed_array_data(arr: &[Value], element_type_code: u8) -> Vec<u8> {
+    use crate::types::type_code as tc;
+    let elem_size = tc::typed_array_element_size(element_type_code);
+    let mut data = Vec::with_capacity(arr.len() * elem_size);
+
+    for v in arr {
+        match element_type_code {
+            tc::TYPED_ARRAY_FLOAT32 => {
+                #[allow(clippy::cast_possible_truncation)]
+                let f = match v {
+                    Value::Float(f) => *f as f32,
+                    Value::Int(n) => *n as f32,
+                    Value::UInt(n) => *n as f32,
+                    _ => unreachable!(),
+                };
+                data.extend_from_slice(&f.to_le_bytes());
+            }
+            tc::TYPED_ARRAY_FLOAT64 => {
+                let f = match v {
+                    Value::Float(f) => *f,
+                    Value::Int(n) => *n as f64,
+                    Value::UInt(n) => *n as f64,
+                    _ => unreachable!(),
+                };
+                data.extend_from_slice(&f.to_le_bytes());
+            }
+            tc::TYPED_ARRAY_SINT8 => {
+                let n = match v { Value::Int(n) => *n, _ => unreachable!() };
+                data.push(n as u8);
+            }
+            tc::TYPED_ARRAY_SINT16 => {
+                let n = match v { Value::Int(n) => *n, _ => unreachable!() };
+                data.extend_from_slice(&(n as i16).to_le_bytes());
+            }
+            tc::TYPED_ARRAY_SINT32 => {
+                let n = match v { Value::Int(n) => *n, _ => unreachable!() };
+                data.extend_from_slice(&(n as i32).to_le_bytes());
+            }
+            tc::TYPED_ARRAY_SINT64 => {
+                let n = match v { Value::Int(n) => *n, _ => unreachable!() };
+                data.extend_from_slice(&n.to_le_bytes());
+            }
+            tc::TYPED_ARRAY_UINT8 => {
+                let n = value_as_u64(v);
+                data.push(n as u8);
+            }
+            tc::TYPED_ARRAY_UINT16 => {
+                let n = value_as_u64(v);
+                data.extend_from_slice(&(n as u16).to_le_bytes());
+            }
+            tc::TYPED_ARRAY_UINT32 => {
+                let n = value_as_u64(v);
+                data.extend_from_slice(&(n as u32).to_le_bytes());
+            }
+            tc::TYPED_ARRAY_UINT64 => {
+                let n = value_as_u64(v);
+                data.extend_from_slice(&n.to_le_bytes());
+            }
+            _ => unreachable!(),
+        }
+    }
+    data
+}
+
+/// Extract u64 from a Value that is known to be a non-negative integer.
+#[allow(clippy::cast_sign_loss)]
+fn value_as_u64(v: &Value) -> u64 {
+    match v {
+        Value::Int(n) => *n as u64,
+        Value::UInt(n) => *n,
+        _ => unreachable!(),
+    }
+}
+
+/// Collect record definitions from a Value tree.
+/// Returns a list of key sets that appear 2+ times among objects.
+fn collect_record_definitions(value: &Value) -> Vec<Vec<String>> {
+    let mut key_set_counts: std::collections::HashMap<Vec<String>, usize> = std::collections::HashMap::new();
+    count_key_sets(value, &mut key_set_counts);
+
+    let mut defs: Vec<Vec<String>> = key_set_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .map(|(keys, _)| keys)
+        .collect();
+    // Sort for deterministic output
+    defs.sort();
+    defs
+}
+
+fn count_key_sets(value: &Value, counts: &mut std::collections::HashMap<Vec<String>, usize>) {
+    match value {
+        Value::Object(map) => {
+            if !map.is_empty() {
+                let keys: Vec<String> = map.keys().cloned().collect();
+                *counts.entry(keys).or_insert(0) += 1;
+            }
+            for v in map.values() {
+                count_key_sets(v, counts);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                count_key_sets(item, counts);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn encode_value_recursive<W: Write>(encoder: &mut Encoder<W>, value: &Value) -> Result<()> {
+    encode_value_recursive_inner(encoder, value, &[], &std::collections::HashMap::new())
+}
+
+#[allow(clippy::only_used_in_recursion)]
+fn encode_value_recursive_inner<W: Write>(
+    encoder: &mut Encoder<W>,
+    value: &Value,
+    record_defs: &[Vec<String>],
+    def_index_map: &std::collections::HashMap<Vec<String>, usize>,
+) -> Result<()> {
     match value {
         Value::Null => encoder.write_null(),
         Value::Bool(b) => encoder.write_bool(*b),
@@ -590,17 +911,34 @@ fn encode_value_recursive<W: Write>(encoder: &mut Encoder<W>, value: &Value) -> 
         Value::BigNumber(bn) => encoder.write_big_number(*bn),
         Value::String(s) => encoder.write_str(s),
         Value::Array(arr) => {
+            // Try typed array encoding
+            if let Some(element_tc) = detect_typed_array(arr) {
+                let data = encode_typed_array_data(arr, element_tc);
+                return encoder.write_typed_array_raw(element_tc, arr.len(), &data);
+            }
             encoder.begin_array()?;
             for item in arr {
-                encode_value_recursive(encoder, item)?;
+                encode_value_recursive_inner(encoder, item, record_defs, def_index_map)?;
             }
             encoder.end_container()
         }
         Value::Object(map) => {
+            // Check if this object matches a record definition
+            if !map.is_empty() {
+                let keys: Vec<String> = map.keys().cloned().collect();
+                if let Some(&idx) = def_index_map.get(&keys) {
+                    encoder.begin_record_instance(idx)?;
+                    // Write values in key order (BTreeMap iterates in sorted order)
+                    for val in map.values() {
+                        encode_value_recursive_inner(encoder, val, record_defs, def_index_map)?;
+                    }
+                    return encoder.end_container();
+                }
+            }
             encoder.begin_object()?;
             for (key, val) in map {
                 encoder.write_str(key)?;
-                encode_value_recursive(encoder, val)?;
+                encode_value_recursive_inner(encoder, val, record_defs, def_index_map)?;
             }
             encoder.end_container()
         }

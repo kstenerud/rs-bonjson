@@ -187,6 +187,8 @@ pub struct Decoder<'a> {
     config: DecoderConfig,
     /// Stack tracking container depth (true = object)
     containers: Vec<bool>,
+    /// Stored record definitions (each is a list of key strings)
+    record_definitions: Vec<Vec<String>>,
 }
 
 /// The type of value that was decoded.
@@ -202,6 +204,10 @@ pub enum DecodedValue<'a> {
     ArrayStart,
     ObjectStart,
     ContainerEnd,
+    /// Start of a record instance, with the definition index.
+    RecordInstanceStart(usize),
+    /// Start of a typed array, with element type code and count.
+    TypedArrayStart { element_type_code: u8, count: usize },
 }
 
 impl<'a> Decoder<'a> {
@@ -219,6 +225,7 @@ impl<'a> Decoder<'a> {
             pos: 0,
             config,
             containers: Vec::new(),
+            record_definitions: Vec::new(),
         }
     }
 
@@ -360,6 +367,7 @@ impl<'a> Decoder<'a> {
             return if type_code::int_is_signed(tc) {
                 self.read_signed_int_sized(size)
             } else {
+                #[allow(clippy::cast_possible_wrap)]
                 Ok(self.read_unsigned_int_sized(size)? as i64)
             };
         }
@@ -373,11 +381,7 @@ impl<'a> Decoder<'a> {
         let tc = self.read_byte()?;
 
         if type_code::is_small_int(tc) {
-            let val = type_code::small_int_value(tc);
-            if val < 0 {
-                return Err(Error::Custom("cannot decode negative int as u64".into()));
-            }
-            return Ok(val as u64);
+            return Ok(u64::from(type_code::small_int_value(tc)));
         }
 
         if type_code::is_any_int(tc) {
@@ -387,6 +391,7 @@ impl<'a> Decoder<'a> {
                 if signed_val < 0 {
                     return Err(Error::ValueOutOfRange);
                 }
+                #[allow(clippy::cast_sign_loss)]
                 Ok(signed_val as u64)
             } else {
                 self.read_unsigned_int_sized(size)
@@ -438,8 +443,10 @@ impl<'a> Decoder<'a> {
         if type_code::is_any_int(tc) {
             let size = type_code::int_size(tc);
             return if type_code::int_is_signed(tc) {
+                #[allow(clippy::cast_precision_loss)]
                 Ok(self.read_signed_int_sized(size)? as f64)
             } else {
+                #[allow(clippy::cast_precision_loss)]
                 Ok(self.read_unsigned_int_sized(size)? as f64)
             };
         }
@@ -467,19 +474,19 @@ impl<'a> Decoder<'a> {
     /// Decode a value given its type code.
     #[allow(clippy::cast_possible_wrap)]
     fn decode_value_with_type_code(&mut self, tc: u8) -> Result<DecodedValue<'a>> {
-        // Small integers: 0x00-0xc8
+        // Small integers: 0x00-0x64
         if type_code::is_small_int(tc) {
             return Ok(DecodedValue::Int(i64::from(type_code::small_int_value(tc))));
         }
 
-        // Short strings: 0xd0-0xdf
+        // Short strings: 0x65-0xa7
         if type_code::is_short_string(tc) {
             let len = type_code::short_string_len(tc);
             let s = self.decode_string_content_cow(len)?;
             return Ok(DecodedValue::String(s));
         }
 
-        // Integers: 0xe0-0xe7
+        // Integers: 0xa8-0xaf
         if type_code::is_any_int(tc) {
             let size = type_code::int_size(tc);
             return if type_code::int_is_signed(tc) {
@@ -491,8 +498,21 @@ impl<'a> Decoder<'a> {
             };
         }
 
+        // Typed arrays: 0xf5-0xfe
+        if type_code::is_typed_array(tc) {
+            let remaining = &self.data[self.pos..];
+            let (count_raw, consumed) = leb128_decode(remaining)
+                .ok_or(Error::Truncated)?;
+            self.pos += consumed;
+            let count = count_raw as usize;
+            if count > self.config.max_container_size {
+                return Err(Error::MaxContainerSizeExceeded);
+            }
+            self.begin_container(false)?;
+            return Ok(DecodedValue::TypedArrayStart { element_type_code: tc, count });
+        }
+
         match tc {
-            type_code::BIG_NUMBER => self.decode_big_number(),
             type_code::FLOAT32 => {
                 let f = self.read_float32()?;
                 Ok(DecodedValue::Float(f))
@@ -501,12 +521,13 @@ impl<'a> Decoder<'a> {
                 let f = self.read_float64()?;
                 Ok(DecodedValue::Float(f))
             }
+            type_code::BIG_NUMBER => self.decode_big_number(),
             type_code::NULL => Ok(DecodedValue::Null),
             type_code::FALSE => Ok(DecodedValue::Bool(false)),
             type_code::TRUE => Ok(DecodedValue::Bool(true)),
-            type_code::STRING_LONG => {
-                let s = self.decode_long_string_content_cow()?;
-                Ok(DecodedValue::String(s))
+            type_code::CONTAINER_END => {
+                self.containers.pop().ok_or(Error::UnbalancedContainers)?;
+                Ok(DecodedValue::ContainerEnd)
             }
             type_code::ARRAY => {
                 self.begin_container(false)?;
@@ -516,9 +537,28 @@ impl<'a> Decoder<'a> {
                 self.begin_container(true)?;
                 Ok(DecodedValue::ObjectStart)
             }
-            type_code::CONTAINER_END => {
-                self.containers.pop().ok_or(Error::UnbalancedContainers)?;
-                Ok(DecodedValue::ContainerEnd)
+            type_code::RECORD_DEF => {
+                // Record definitions must not appear in value position
+                Err(Error::InvalidTypeCode(tc))
+            }
+            type_code::RECORD_INSTANCE => {
+                let remaining = &self.data[self.pos..];
+                let (index_raw, consumed) = leb128_decode(remaining)
+                    .ok_or(Error::Truncated)?;
+                self.pos += consumed;
+                let def_index = index_raw as usize;
+                if def_index >= self.record_definitions.len() {
+                    return Err(Error::InvalidData(format!(
+                        "record definition index {} out of range (have {})",
+                        def_index, self.record_definitions.len()
+                    )));
+                }
+                self.begin_container(false)?;
+                Ok(DecodedValue::RecordInstanceStart(def_index))
+            }
+            type_code::STRING_LONG => {
+                let s = self.decode_long_string_content_cow()?;
+                Ok(DecodedValue::String(s))
             }
             _ => Err(Error::InvalidTypeCode(tc)),
         }
@@ -741,6 +781,87 @@ impl<'a> Decoder<'a> {
         Ok(DecodedValue::BigNumber(BigNumber::new(sign, significand, exponent)))
     }
 
+    /// Read record definitions from the start of a document.
+    /// Reads consecutive 0xB9 type codes; stops when a non-0xB9 byte is seen.
+    pub fn read_record_definitions(&mut self) -> Result<()> {
+        while self.pos < self.data.len() && self.data[self.pos] == type_code::RECORD_DEF {
+            self.pos += 1; // consume 0xB9
+            let mut keys = Vec::new();
+            let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+            loop {
+                if self.pos >= self.data.len() {
+                    return Err(Error::Truncated);
+                }
+                if self.data[self.pos] == type_code::CONTAINER_END {
+                    self.pos += 1; // consume end marker
+                    break;
+                }
+                if keys.len() >= self.config.max_container_size {
+                    return Err(Error::MaxContainerSizeExceeded);
+                }
+                // Read a string key
+                let tc = self.read_byte()?;
+                let key = if type_code::is_short_string(tc) {
+                    let len = type_code::short_string_len(tc);
+                    self.decode_string_content(len)?.to_string()
+                } else if tc == type_code::STRING_LONG {
+                    self.decode_long_string_content()?.to_string()
+                } else {
+                    return Err(Error::InvalidData(
+                        "record definition key must be a string".into(),
+                    ));
+                };
+                // Check for duplicate keys within definition
+                if !seen_keys.insert(key.clone()) {
+                    return Err(Error::DuplicateKey);
+                }
+                keys.push(key);
+            }
+            self.record_definitions.push(keys);
+        }
+        Ok(())
+    }
+
+    /// Get the stored record definitions.
+    #[must_use]
+    pub fn record_definitions(&self) -> &[Vec<String>] {
+        &self.record_definitions
+    }
+
+    /// Read a single typed array element given the array's type code.
+    pub fn read_typed_array_element(&mut self, element_type_code: u8) -> Result<DecodedValue<'a>> {
+        let size = type_code::typed_array_element_size(element_type_code);
+        let bytes = self.read_bytes(size)?;
+
+        if type_code::typed_array_is_float(element_type_code) {
+            if element_type_code == type_code::TYPED_ARRAY_FLOAT32 {
+                let f = f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+                self.check_float(f)?;
+                Ok(DecodedValue::Float(f))
+            } else {
+                let f = f64::from_le_bytes(bytes.try_into().unwrap());
+                self.check_float(f)?;
+                Ok(DecodedValue::Float(f))
+            }
+        } else if type_code::typed_array_is_signed_int(element_type_code) {
+            let fill = ((bytes[size - 1] as i8) >> 7) as u8;
+            let mut buf = [fill; 8];
+            buf[..size].copy_from_slice(bytes);
+            Ok(DecodedValue::Int(i64::from_le_bytes(buf)))
+        } else {
+            // Unsigned int
+            let mut buf = [0u8; 8];
+            buf[..size].copy_from_slice(bytes);
+            Ok(DecodedValue::UInt(u64::from_le_bytes(buf)))
+        }
+    }
+
+    /// Pop the container for a typed array (called after reading all elements).
+    pub fn end_typed_array(&mut self) -> Result<()> {
+        self.containers.pop().ok_or(Error::UnbalancedContainers)?;
+        Ok(())
+    }
+
     /// Decode the next value from the input.
     pub fn decode_value(&mut self) -> Result<DecodedValue<'a>> {
         let tc = self.read_byte()?;
@@ -784,67 +905,68 @@ mod tests {
 
     #[test]
     fn test_decode_small_ints() {
-        let mut dec = Decoder::new(&[0x64]);
+        let mut dec = Decoder::new(&[0x00]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(0));
 
-        let mut dec = Decoder::new(&[0xc8]);
+        let mut dec = Decoder::new(&[0x64]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(100));
 
-        let mut dec = Decoder::new(&[0x00]);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(-100));
-
-        let mut dec = Decoder::new(&[0x63]);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(-1));
+        let mut dec = Decoder::new(&[0x2a]);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(42));
     }
 
     #[test]
     fn test_decode_larger_ints() {
-        // sint16 (0xe5) 1000
-        let mut dec = Decoder::new(&[0xe5, 0xe8, 0x03]);
+        // sint16 (0xad) 1000
+        let mut dec = Decoder::new(&[0xad, 0xe8, 0x03]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(1000));
 
-        // uint8 (0xe0) 180
-        let mut dec = Decoder::new(&[0xe0, 0xb4]);
+        // uint8 (0xa8) 180
+        let mut dec = Decoder::new(&[0xa8, 0xb4]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::UInt(180));
+
+        // sint8 (0xac) -1
+        let mut dec = Decoder::new(&[0xac, 0xff]);
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::Int(-1));
     }
 
     #[test]
     fn test_decode_null_bool() {
-        let mut dec = Decoder::new(&[0xcd]);
+        let mut dec = Decoder::new(&[0xb3]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Null);
 
-        let mut dec = Decoder::new(&[0xcf]);
+        let mut dec = Decoder::new(&[0xb5]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Bool(true));
 
-        let mut dec = Decoder::new(&[0xce]);
+        let mut dec = Decoder::new(&[0xb4]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::Bool(false));
     }
 
     #[test]
     fn test_decode_short_string() {
-        // Empty string: 0xd0
-        let mut dec = Decoder::new(&[0xd0]);
+        // Empty string: 0x65
+        let mut dec = Decoder::new(&[0x65]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("")));
 
-        // "x": 0xd1 + 'x'
-        let mut dec = Decoder::new(&[0xd1, 0x78]);
+        // "x": 0x66 + 'x'
+        let mut dec = Decoder::new(&[0x66, 0x78]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("x")));
     }
 
     #[test]
     fn test_decode_long_string() {
-        // "abcdefghijklmnop" (16 bytes): FF + data + FF
+        // 67-byte string: FF + data + FF
         let mut data = vec![0xff];
-        data.extend_from_slice(b"abcdefghijklmnop");
+        data.extend_from_slice(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_____");
         data.push(0xff);
         let mut dec = Decoder::new(&data);
-        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("abcdefghijklmnop")));
+        assert_eq!(dec.decode_value().unwrap(), DecodedValue::String(Cow::Borrowed("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_____")));
     }
 
     #[test]
     fn test_decode_empty_array() {
-        // FC FE
-        let mut dec = Decoder::new(&[0xfc, 0xfe]);
+        // B7 B6
+        let mut dec = Decoder::new(&[0xb7, 0xb6]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::ArrayStart);
         assert!(dec.is_at_container_end().unwrap());
         dec.end_container().unwrap();
@@ -853,8 +975,8 @@ mod tests {
 
     #[test]
     fn test_decode_empty_object() {
-        // FD FE
-        let mut dec = Decoder::new(&[0xfd, 0xfe]);
+        // B8 B6
+        let mut dec = Decoder::new(&[0xb8, 0xb6]);
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::ObjectStart);
         assert!(dec.is_at_container_end().unwrap());
         dec.end_container().unwrap();
@@ -863,8 +985,8 @@ mod tests {
 
     #[test]
     fn test_decode_array_with_values() {
-        // [1, "x", null] → FC 65 D1 78 CD FE
-        let data = [0xfc, 0x65, 0xd1, 0x78, 0xcd, 0xfe];
+        // [1, "x", null] → B7 01 66 78 B3 B6
+        let data = [0xb7, 0x01, 0x66, 0x78, 0xb3, 0xb6];
         let mut dec = Decoder::new(&data);
 
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::ArrayStart);
@@ -881,8 +1003,8 @@ mod tests {
 
     #[test]
     fn test_decode_object() {
-        // {"a": 1} → FD D1 61 65 FE
-        let data = [0xfd, 0xd1, 0x61, 0x65, 0xfe];
+        // {"a": 1} → B8 66 61 01 B6
+        let data = [0xb8, 0x66, 0x61, 0x01, 0xb6];
         let mut dec = Decoder::new(&data);
 
         assert_eq!(dec.decode_value().unwrap(), DecodedValue::ObjectStart);
@@ -897,22 +1019,22 @@ mod tests {
 
     #[test]
     fn test_reserved_type_codes() {
-        let mut dec = Decoder::new(&[0xc9]);
-        assert!(matches!(dec.decode_value(), Err(Error::InvalidTypeCode(0xc9))));
+        let mut dec = Decoder::new(&[0xbb]);
+        assert!(matches!(dec.decode_value(), Err(Error::InvalidTypeCode(0xbb))));
 
-        let mut dec = Decoder::new(&[0xe8]);
-        assert!(matches!(dec.decode_value(), Err(Error::InvalidTypeCode(0xe8))));
+        let mut dec = Decoder::new(&[0xf4]);
+        assert!(matches!(dec.decode_value(), Err(Error::InvalidTypeCode(0xf4))));
     }
 
     #[test]
     fn test_truncated() {
-        let mut dec = Decoder::new(&[0xe5, 0xe8]); // Missing second byte of int16
+        let mut dec = Decoder::new(&[0xad, 0xe8]); // Missing second byte of sint16
         assert!(matches!(dec.decode_value(), Err(Error::Truncated)));
     }
 
     #[test]
     fn test_trailing_bytes() {
-        let mut dec = Decoder::new(&[0x64, 0x64]); // int 0 + extra byte
+        let mut dec = Decoder::new(&[0x00, 0x00]); // int 0 + extra byte
         dec.decode_value().unwrap();
         assert!(matches!(dec.finish(), Err(Error::TrailingBytes)));
     }

@@ -163,7 +163,7 @@ impl<W: Write> Encoder<W> {
             return Err(Error::NulCharacter);
         }
 
-        if len <= 15 {
+        if len <= 66 {
             self.write_byte(type_code::STRING0 + len as u8)?;
             self.write_bytes(bytes)?;
         } else {
@@ -345,7 +345,7 @@ impl<W: Write> Encoder<W> {
             return Err(Error::NulCharacter);
         }
 
-        if len <= 15 {
+        if len <= 66 {
             self.write_byte(type_code::STRING0 + len as u8)?;
             self.write_bytes(bytes)?;
         } else {
@@ -385,7 +385,70 @@ impl<W: Write> Encoder<W> {
         Ok(())
     }
 
-    /// End the current container by writing the end marker (0xFE).
+    /// Write a record definition (type code 0xB9 + string keys + container end).
+    pub fn write_record_definition(&mut self, keys: &[&str]) -> Result<()> {
+        self.write_byte(type_code::RECORD_DEF)?;
+        for key in keys {
+            self.write_str_raw(key)?;
+        }
+        self.write_byte(type_code::CONTAINER_END)
+    }
+
+    /// Begin a record instance (type code 0xBA + LEB128 definition index).
+    /// Values should be written with normal write methods, terminated by end_container().
+    pub fn begin_record_instance(&mut self, def_index: usize) -> Result<()> {
+        if self.expecting_object_key() {
+            return Err(Error::ExpectedObjectKey);
+        }
+        self.write_byte(type_code::RECORD_INSTANCE)?;
+        let mut buf = [0u8; 10];
+        let n = leb128_encode(def_index as u64, &mut buf);
+        self.write_bytes(&buf[..n])?;
+        self.containers.push(ContainerState {
+            is_object: false,
+            expecting_key: false,
+        });
+        Ok(())
+    }
+
+    /// Write a typed array with raw bytes.
+    /// `type_code_byte` is one of TYPED_ARRAY_* constants.
+    /// `count` is the number of elements, `data` is the raw LE byte data.
+    pub fn write_typed_array_raw(&mut self, type_code_byte: u8, count: usize, data: &[u8]) -> Result<()> {
+        if self.expecting_object_key() {
+            return Err(Error::ExpectedObjectKey);
+        }
+        self.write_byte(type_code_byte)?;
+        let mut buf = [0u8; 10];
+        let n = leb128_encode(count as u64, &mut buf);
+        self.write_bytes(&buf[..n])?;
+        self.write_bytes(data)?;
+        self.toggle_object_state();
+        Ok(())
+    }
+
+    /// Write a string without container state tracking (for record definition keys).
+    #[allow(clippy::cast_possible_truncation)]
+    fn write_str_raw(&mut self, value: &str) -> Result<()> {
+        let bytes = value.as_bytes();
+        let len = bytes.len();
+
+        if !self.config.allow_nul && memchr::memchr(0, bytes).is_some() {
+            return Err(Error::NulCharacter);
+        }
+
+        if len <= 66 {
+            self.write_byte(type_code::STRING0 + len as u8)?;
+            self.write_bytes(bytes)?;
+        } else {
+            self.write_byte(type_code::STRING_LONG)?;
+            self.write_bytes(bytes)?;
+            self.write_byte(type_code::STRING_LONG)?;
+        }
+        Ok(())
+    }
+
+    /// End the current container by writing the end marker.
     pub fn end_container(&mut self) -> Result<()> {
         let container = self
             .containers
@@ -419,7 +482,7 @@ impl<W: Write> Encoder<W> {
     fn write_unsigned_int(&mut self, value: u64) -> Result<()> {
         // Small integer range: 0-100
         if value <= 100 {
-            return self.write_byte((value as u8) + 100);
+            return self.write_byte(value as u8);
         }
 
         let min_bytes = required_unsigned_bytes_min1(value);
@@ -443,9 +506,9 @@ impl<W: Write> Encoder<W> {
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_sign_loss)]
     fn write_signed_int(&mut self, value: i64) -> Result<()> {
-        // Small integer range: -100 to 100
-        if (-100..=100).contains(&value) {
-            return self.write_byte((value + 100) as u8);
+        // Small integer range: 0 to 100
+        if (0..=100).contains(&value) {
+            return self.write_byte(value as u8);
         }
 
         let min_bytes = required_signed_bytes_min1(value);
@@ -564,37 +627,39 @@ mod tests {
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(0).unwrap();
-        assert_eq!(buf, vec![0x64]);
-
-        buf.clear();
-        let mut enc = Encoder::new(&mut buf);
-        enc.write_i64(100).unwrap();
-        assert_eq!(buf, vec![0xc8]);
-
-        buf.clear();
-        let mut enc = Encoder::new(&mut buf);
-        enc.write_i64(-100).unwrap();
         assert_eq!(buf, vec![0x00]);
 
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
+        enc.write_i64(100).unwrap();
+        assert_eq!(buf, vec![0x64]);
+
+        // -1 requires sint8 encoding now
+        buf.clear();
+        let mut enc = Encoder::new(&mut buf);
         enc.write_i64(-1).unwrap();
-        assert_eq!(buf, vec![0x63]);
+        assert_eq!(buf, vec![0xac, 0xff]);
+
+        // -100 requires sint8 encoding
+        buf.clear();
+        let mut enc = Encoder::new(&mut buf);
+        enc.write_i64(-100).unwrap();
+        assert_eq!(buf, vec![0xac, 0x9c]);
     }
 
     #[test]
     fn test_encode_larger_ints() {
-        // 1000 as sint16 (0xe5): native size for 2 bytes
+        // 1000 as sint16 (0xad): native size for 2 bytes
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_i64(1000).unwrap();
-        assert_eq!(buf, vec![0xe5, 0xe8, 0x03]);
+        assert_eq!(buf, vec![0xad, 0xe8, 0x03]);
 
-        // 180 as uint8 (0xe0)
+        // 180 as uint8 (0xa8)
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_u64(180).unwrap();
-        assert_eq!(buf, vec![0xe0, 0xb4]);
+        assert_eq!(buf, vec![0xa8, 0xb4]);
     }
 
     #[test]
@@ -602,66 +667,66 @@ mod tests {
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_null().unwrap();
-        assert_eq!(buf, vec![0xcd]);
+        assert_eq!(buf, vec![0xb3]);
 
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_bool(true).unwrap();
-        assert_eq!(buf, vec![0xcf]);
+        assert_eq!(buf, vec![0xb5]);
 
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_bool(false).unwrap();
-        assert_eq!(buf, vec![0xce]);
+        assert_eq!(buf, vec![0xb4]);
     }
 
     #[test]
     fn test_encode_short_string() {
-        // Empty string: 0xd0
+        // Empty string: 0x65
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str("").unwrap();
-        assert_eq!(buf, vec![0xd0]);
+        assert_eq!(buf, vec![0x65]);
 
-        // "A": 0xd1 + 'A'
+        // "A": 0x66 + 'A'
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str("A").unwrap();
-        assert_eq!(buf, vec![0xd1, 0x41]);
+        assert_eq!(buf, vec![0x66, 0x41]);
     }
 
     #[test]
     fn test_encode_long_string() {
-        // 16-byte string → FF + data + FF
-        let s = "abcdefghijklmnop"; // 16 bytes
+        // 67-byte string → FF + data + FF (exceeds short string max of 66)
+        let s = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_____"; // 67 bytes
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.write_str(s).unwrap();
         assert_eq!(buf[0], 0xff);
-        assert_eq!(&buf[1..17], s.as_bytes());
-        assert_eq!(buf[17], 0xff);
+        assert_eq!(&buf[1..68], s.as_bytes());
+        assert_eq!(buf[68], 0xff);
     }
 
     #[test]
     fn test_encode_empty_containers() {
-        // Empty array: FC FE
+        // Empty array: B7 B6
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.begin_array().unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0xfc, 0xfe]);
+        assert_eq!(buf, vec![0xb7, 0xb6]);
 
-        // Empty object: FD FE
+        // Empty object: B8 B6
         buf.clear();
         let mut enc = Encoder::new(&mut buf);
         enc.begin_object().unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0xfd, 0xfe]);
+        assert_eq!(buf, vec![0xb8, 0xb6]);
     }
 
     #[test]
     fn test_encode_array_with_values() {
-        // [1, "x", null] → FC 65 D1 78 CD FE
+        // [1, "x", null] → B7 01 66 78 B3 B6
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.begin_array().unwrap();
@@ -669,19 +734,19 @@ mod tests {
         enc.write_str("x").unwrap();
         enc.write_null().unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0xfc, 0x65, 0xd1, 0x78, 0xcd, 0xfe]);
+        assert_eq!(buf, vec![0xb7, 0x01, 0x66, 0x78, 0xb3, 0xb6]);
     }
 
     #[test]
     fn test_encode_object() {
-        // {"a": 1} → FD D1 61 65 FE
+        // {"a": 1} → B8 66 61 01 B6
         let mut buf = Vec::new();
         let mut enc = Encoder::new(&mut buf);
         enc.begin_object().unwrap();
         enc.write_str("a").unwrap();
         enc.write_i64(1).unwrap();
         enc.end_container().unwrap();
-        assert_eq!(buf, vec![0xfd, 0xd1, 0x61, 0x65, 0xfe]);
+        assert_eq!(buf, vec![0xb8, 0x66, 0x61, 0x01, 0xb6]);
     }
 
     #[test]

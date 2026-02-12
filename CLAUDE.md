@@ -50,8 +50,9 @@ The project uses a layered architecture:
 - Automatically chooses smallest encoding for integers and floats
 - Validates floats (rejects NaN/Infinity by default)
 - BigNumber encoding: zigzag LEB128 exponent + zigzag LEB128 signed_length + raw LE magnitude bytes
-- Delimiter-terminated containers (FC/FD start, FE end)
-- FF-terminated long strings (FF + payload + FF)
+- Delimiter-terminated containers (B7/B8 start, B6 end)
+- Short strings up to 66 bytes inline, FF-terminated long strings (FF + payload + FF)
+- Methods: `write_record_definition()`, `begin_record_instance()`, `write_typed_array_raw()`
 
 ### decoder.rs
 - `Decoder<'a>` - zero-copy decoder that borrows from input slice
@@ -63,9 +64,11 @@ The project uses a layered architecture:
 - `UnicodeNormalization` - None or Nfc (requires `unicode-normalization` feature)
 - Optional SIMD-accelerated UTF-8 validation via `simd-utf8` feature
 - `DecodedValue<'a>` enum uses `Cow<'a, str>` for strings (zero-copy in default mode)
-- Returns `DecodedValue<'a>` enum for streaming access
+- Returns `DecodedValue<'a>` enum for streaming access (includes `RecordInstanceStart`, `TypedArrayStart`)
 - BigNumber decoding: zigzag LEB128 exponent + zigzag LEB128 signed_length + raw LE magnitude bytes with normalization validation
 - Direct decode methods for serde path avoid `DecodedValue` intermediary
+- Tracks `record_definitions` field for record instance expansion
+- Methods: `read_record_definitions()`, `read_typed_array_element()`, `end_typed_array()`
 
 ### value.rs
 - `Value` enum - dynamic value type similar to `serde_json::Value`
@@ -94,22 +97,30 @@ The project uses a layered architecture:
 ### Type Code Layout
 | Range | Meaning |
 |-------|---------|
-| 00–C8 | Small integers (-100 to 100), value = code - 100 |
-| C9 | Reserved |
-| CA | BigNumber (zigzag LEB128 exponent + signed_length + LE magnitude) |
-| CB | float32 (IEEE 754, little-endian) |
-| CC | float64 (IEEE 754, little-endian) |
-| CD | null |
-| CE | false |
-| CF | true |
-| D0–DF | Short string (0–15 bytes, length = code & 0x0F) |
-| E0–E3 | Unsigned integers (uint8, uint16, uint32, uint64) |
-| E4–E7 | Signed integers (int8, int16, int32, int64) |
-| E8–FB | Reserved |
-| FC | Array start |
-| FD | Object start |
-| FE | Container end |
+| 00–64 | Small integers (0 to 100), value = code |
+| 65–A7 | Short string (0–66 bytes, length = code - 0x65) |
+| A8–AB | Unsigned integers (uint8, uint16, uint32, uint64) |
+| AC–AF | Signed integers (int8, int16, int32, int64) |
+| B0 | float32 (IEEE 754, little-endian) |
+| B1 | float64 (IEEE 754, little-endian) |
+| B2 | BigNumber (zigzag LEB128 exponent + signed_length + LE magnitude) |
+| B3 | null |
+| B4 | false |
+| B5 | true |
+| B6 | Container end |
+| B7 | Array start |
+| B8 | Object start |
+| B9 | Record definition (string keys + 0xB6) |
+| BA | Record instance (LEB128 def_index + values + 0xB6) |
+| BB–F4 | Reserved |
+| F5–FE | Typed arrays (float64, float32, sint64..uint8) |
 | FF | Long string start/terminator |
+
+### Record Types
+Record definitions (`0xB9`) define key-set templates before the root value. Record instances (`0xBA`) reference a definition by LEB128 index. During encoding (Value API), the encoder performs a two-pass scan: collect key sets that appear 2+ times, emit definitions, then encode objects matching those key sets as record instances. The serde streaming path always uses regular objects (no buffering). During decoding, record instances are transparently expanded into objects.
+
+### Typed Arrays
+Typed arrays (`0xF5-0xFE`) are length-prefixed homogeneous numeric arrays. 10 element types: float64, float32, sint64/32/16/8, uint64/32/16/8. During encoding (Value API), the encoder auto-detects homogeneous numeric `Value::Array`s and emits typed arrays. The serde streaming path always uses regular arrays. During decoding, typed arrays are transparently expanded into individual values.
 
 ### Performance Optimizations
 
@@ -122,7 +133,7 @@ The project uses a layered architecture:
 #### Decoder (de.rs, decoder.rs)
 - Zero-copy string decoding for single-segment strings
 - Direct decode methods (`decode_i64_direct()`, `decode_str_direct()`, etc.) return primitives directly instead of going through `DecodedValue` enum
-- `try_consume_container_end()` checks for 0xFE delimiter and pops container state
+- `try_consume_container_end()` checks for 0xB6 delimiter and pops container state
 - Serde path uses unchecked methods that skip container state tracking
 - Branchless sign extension for signed integer decoding (arithmetic right shift)
 - Uses `memchr` for NUL byte detection in both short and long strings (decoder and encoder)
@@ -130,9 +141,9 @@ The project uses a layered architecture:
 
 #### Type Code Dispatch (types.rs)
 The type code layout enables efficient mask-based dispatch:
-- `0x00-0xc8`: Small integers (value = code - 100)
-- `0xd0-0xdf`: Short strings — `(code & 0xf0) == 0xd0`, length from `(code & 0x0f)`
-- `0xe0-0xe7`: Integers — `(code & 0xf8) == 0xe0`, sign bit at `(code & 0x04)`, size index from `(code & 0x03)`
+- `0x00-0x64`: Small integers (value = code)
+- `0x65-0xa7`: Short strings — range-based dispatch, length from `(code - 0x65)`, up to 66 bytes
+- `0xa8-0xaf`: Integers — `(code & 0xf8) == 0xa8`, sign from `code >= 0xac`, size from `code & 0x03`
 
 Key optimization: Combined integer check `is_any_int()` tests all integers (signed and unsigned)
 with a single mask operation, then determines sign with `int_is_signed()`.

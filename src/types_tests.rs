@@ -5,34 +5,30 @@ use crate::types::{type_code, BigNumber};
 
 #[test]
 fn test_small_int_codes() {
-    assert!(type_code::is_small_int(0x00)); // -100
-    assert!(type_code::is_small_int(0x64)); // 0
-    assert!(type_code::is_small_int(0xc8)); // 100
-    assert!(!type_code::is_small_int(0xc9)); // Reserved
+    assert!(type_code::is_small_int(0x00)); // 0
+    assert!(type_code::is_small_int(0x64)); // 100
+    assert!(!type_code::is_small_int(0x65)); // String0
 
-    assert_eq!(type_code::small_int_value(0x00), -100);
-    assert_eq!(type_code::small_int_value(0x63), -1);
-    assert_eq!(type_code::small_int_value(0x64), 0);
-    assert_eq!(type_code::small_int_value(0x65), 1);
-    assert_eq!(type_code::small_int_value(0xc8), 100);
+    assert_eq!(type_code::small_int_value(0x00), 0);
+    assert_eq!(type_code::small_int_value(0x01), 1);
+    assert_eq!(type_code::small_int_value(0x64), 100);
+    assert_eq!(type_code::small_int_value(0x2a), 42);
 
-    assert_eq!(type_code::small_int_code(-100), 0x00);
-    assert_eq!(type_code::small_int_code(-1), 0x63);
-    assert_eq!(type_code::small_int_code(0), 0x64);
-    assert_eq!(type_code::small_int_code(1), 0x65);
-    assert_eq!(type_code::small_int_code(100), 0xc8);
+    assert_eq!(type_code::small_int_code(0), 0x00);
+    assert_eq!(type_code::small_int_code(1), 0x01);
+    assert_eq!(type_code::small_int_code(100), 0x64);
 }
 
 #[test]
 fn test_short_string_codes() {
-    // Short strings: 0xd0-0xdf
-    assert!(type_code::is_short_string(0xd0));
-    assert!(type_code::is_short_string(0xdf));
-    assert!(!type_code::is_short_string(0xcf));
-    assert!(!type_code::is_short_string(0xe0));
+    // Short strings: 0x65-0xa7
+    assert!(type_code::is_short_string(0x65));
+    assert!(type_code::is_short_string(0xa7));
+    assert!(!type_code::is_short_string(0x64));
+    assert!(!type_code::is_short_string(0xa8));
 
-    assert_eq!(type_code::short_string_len(0xd0), 0);
-    assert_eq!(type_code::short_string_len(0xdf), 15);
+    assert_eq!(type_code::short_string_len(0x65), 0);
+    assert_eq!(type_code::short_string_len(0xa7), 66);
 }
 
 #[test]

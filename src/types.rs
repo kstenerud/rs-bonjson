@@ -7,85 +7,99 @@
 /// Type codes for BONJSON values.
 /// These match the BONJSON specification exactly.
 pub mod type_code {
-    // Small integers: 0x00-0xc8 (values -100 to 100, computed as type_code - 100)
-    pub const SMALLINT_MIN: u8 = 0x00; // -100 (0 - 100 = -100)
-    pub const SMALLINT_MAX: u8 = 0xc8; // 100 (200 - 100 = 100)
-    pub const SMALLINT_ZERO: u8 = 0x64; // 0 (100 - 100 = 0)
+    // Small integers: 0x00-0x64 (values 0 to 100, value = type_code)
+    pub const SMALLINT_MIN: u8 = 0x00; // 0
+    pub const SMALLINT_MAX: u8 = 0x64; // 100
 
-    // 0xc9: Reserved
-    pub const RESERVED_C9: u8 = 0xc9;
+    // Short strings (0-66 bytes): 0x65-0xa7
+    pub const STRING0: u8 = 0x65;
+    pub const STRING_MAX: u8 = 0xa7;
 
-    // Big number: zigzag LEB128 exponent + zigzag LEB128 signed_length + LE magnitude bytes
-    pub const BIG_NUMBER: u8 = 0xca;
+    // Unsigned integers (CPU-native sizes): 0xa8-0xab
+    pub const UINT8: u8 = 0xa8;
+    pub const UINT16: u8 = 0xa9;
+    pub const UINT32: u8 = 0xaa;
+    pub const UINT64: u8 = 0xab;
+
+    // Signed integers (CPU-native sizes): 0xac-0xaf
+    pub const SINT8: u8 = 0xac;
+    pub const SINT16: u8 = 0xad;
+    pub const SINT32: u8 = 0xae;
+    pub const SINT64: u8 = 0xaf;
 
     // Floats (little-endian IEEE 754)
-    pub const FLOAT32: u8 = 0xcb;
-    pub const FLOAT64: u8 = 0xcc;
+    pub const FLOAT32: u8 = 0xb0;
+    pub const FLOAT64: u8 = 0xb1;
+
+    // Big number: zigzag LEB128 exponent + zigzag LEB128 signed_length + LE magnitude bytes
+    pub const BIG_NUMBER: u8 = 0xb2;
 
     // Null and booleans
-    pub const NULL: u8 = 0xcd;
-    pub const FALSE: u8 = 0xce;
-    pub const TRUE: u8 = 0xcf;
+    pub const NULL: u8 = 0xb3;
+    pub const FALSE: u8 = 0xb4;
+    pub const TRUE: u8 = 0xb5;
 
-    // Short strings (0-15 bytes): 0xd0-0xdf
-    pub const STRING0: u8 = 0xd0;
-    pub const STRING15: u8 = 0xdf;
-
-    // Unsigned integers (CPU-native sizes): 0xe0-0xe3
-    pub const UINT8: u8 = 0xe0;
-    pub const UINT16: u8 = 0xe1;
-    pub const UINT32: u8 = 0xe2;
-    pub const UINT64: u8 = 0xe3;
-
-    // Signed integers (CPU-native sizes): 0xe4-0xe7
-    pub const SINT8: u8 = 0xe4;
-    pub const SINT16: u8 = 0xe5;
-    pub const SINT32: u8 = 0xe6;
-    pub const SINT64: u8 = 0xe7;
-
-    // Reserved: 0xe8-0xfb
+    // Container end marker
+    pub const CONTAINER_END: u8 = 0xb6;
 
     // Containers (delimiter-terminated)
-    pub const ARRAY: u8 = 0xfc;
-    pub const OBJECT: u8 = 0xfd;
-    pub const CONTAINER_END: u8 = 0xfe;
+    pub const ARRAY: u8 = 0xb7;
+    pub const OBJECT: u8 = 0xb8;
+
+    // Record definition and instance
+    pub const RECORD_DEF: u8 = 0xb9;
+    pub const RECORD_INSTANCE: u8 = 0xba;
+
+    // Reserved: 0xbb-0xf4
+
+    // Typed arrays: 0xf5-0xfe (length-prefixed, no end marker)
+    pub const TYPED_ARRAY_FLOAT64: u8 = 0xf5;
+    pub const TYPED_ARRAY_FLOAT32: u8 = 0xf6;
+    pub const TYPED_ARRAY_SINT64: u8 = 0xf7;
+    pub const TYPED_ARRAY_SINT32: u8 = 0xf8;
+    pub const TYPED_ARRAY_SINT16: u8 = 0xf9;
+    pub const TYPED_ARRAY_SINT8: u8 = 0xfa;
+    pub const TYPED_ARRAY_UINT64: u8 = 0xfb;
+    pub const TYPED_ARRAY_UINT32: u8 = 0xfc;
+    pub const TYPED_ARRAY_UINT16: u8 = 0xfd;
+    pub const TYPED_ARRAY_UINT8: u8 = 0xfe;
 
     // Long string delimiter (starts and terminates long strings)
     pub const STRING_LONG: u8 = 0xff;
 
-    /// Check if a type code is a small integer (-100 to 100)
+    /// Check if a type code is a small integer (0 to 100)
     #[inline]
     #[must_use]
     pub const fn is_small_int(code: u8) -> bool {
         code <= SMALLINT_MAX
     }
 
-    /// Decode a small integer type code to its value (`type_code` - 100)
+    /// Decode a small integer type code to its value (same as type_code)
     #[inline]
     #[must_use]
-    pub const fn small_int_value(code: u8) -> i8 {
-        (code as i16 - 100) as i8
+    pub const fn small_int_value(code: u8) -> u8 {
+        code
     }
 
-    /// Encode a small integer value (-100 to 100) to its type code
+    /// Encode a small integer value (0 to 100) to its type code
     #[inline]
     #[must_use]
-    pub const fn small_int_code(value: i8) -> u8 {
-        (value as i16 + 100) as u8
+    pub const fn small_int_code(value: u8) -> u8 {
+        value
     }
 
-    /// Check if a type code is a short string (0-15 bytes)
+    /// Check if a type code is a short string (0-66 bytes)
     #[inline]
     #[must_use]
     pub const fn is_short_string(code: u8) -> bool {
-        (code & 0xf0) == 0xd0
+        code >= STRING0 && code <= STRING_MAX
     }
 
     /// Get the length of a short string from its type code
     #[inline]
     #[must_use]
     pub const fn short_string_len(code: u8) -> usize {
-        (code & 0x0f) as usize
+        (code - STRING0) as usize
     }
 
     /// Check if a type code is any string type (short or long)
@@ -95,7 +109,7 @@ pub mod type_code {
         is_short_string(code) || code == STRING_LONG
     }
 
-    /// Check if a type code is an unsigned integer (0xe0-0xe3)
+    /// Check if a type code is an unsigned integer (0xa8-0xab)
     #[inline]
     #[must_use]
     pub const fn is_unsigned_int(code: u8) -> bool {
@@ -110,7 +124,7 @@ pub mod type_code {
         1 << (code - UINT8) as usize
     }
 
-    /// Check if a type code is a signed integer (0xe4-0xe7)
+    /// Check if a type code is a signed integer (0xac-0xaf)
     #[inline]
     #[must_use]
     pub const fn is_signed_int(code: u8) -> bool {
@@ -125,14 +139,14 @@ pub mod type_code {
         1 << (code - SINT8) as usize
     }
 
-    /// Check if a type code is any integer (signed or unsigned): 0xe0-0xe7
+    /// Check if a type code is any integer (signed or unsigned): 0xa8-0xaf
     #[inline]
     #[must_use]
     pub const fn is_any_int(code: u8) -> bool {
         code >= UINT8 && code <= SINT64
     }
 
-    /// Check if an integer type code is signed (0xe4-0xe7).
+    /// Check if an integer type code is signed (0xac-0xaf).
     /// Only valid when `is_any_int()` returns true.
     #[inline]
     #[must_use]
@@ -150,11 +164,53 @@ pub mod type_code {
         1 << ((code & 0x03) as usize)
     }
 
+    /// Check if a type code is a typed array (0xf5-0xfe)
+    #[inline]
+    #[must_use]
+    pub const fn is_typed_array(code: u8) -> bool {
+        code >= TYPED_ARRAY_FLOAT64 && code <= TYPED_ARRAY_UINT8
+    }
+
+    /// Get the element byte size for a typed array type code.
+    /// Returns 1, 2, 4, or 8.
+    /// Only valid when `is_typed_array()` returns true.
+    #[inline]
+    #[must_use]
+    pub const fn typed_array_element_size(code: u8) -> usize {
+        // Lookup indexed by (0xfe - code): [0]=u8:1, [1]=u16:2, [2]=u32:4, [3]=u64:8, [4]=s8:1, [5]=s16:2, [6]=s32:4, [7]=s64:8, [8]=f32:4, [9]=f64:8
+        const SIZES: [usize; 10] = [1, 2, 4, 8, 1, 2, 4, 8, 4, 8];
+        SIZES[(TYPED_ARRAY_UINT8 - code) as usize]
+    }
+
+    /// Check if a typed array element type is signed integer.
+    /// Only valid when `is_typed_array()` returns true.
+    #[inline]
+    #[must_use]
+    pub const fn typed_array_is_signed_int(code: u8) -> bool {
+        code >= TYPED_ARRAY_SINT64 && code <= TYPED_ARRAY_SINT8
+    }
+
+    /// Check if a typed array element type is unsigned integer.
+    /// Only valid when `is_typed_array()` returns true.
+    #[inline]
+    #[must_use]
+    pub const fn typed_array_is_unsigned_int(code: u8) -> bool {
+        code >= TYPED_ARRAY_UINT64 && code <= TYPED_ARRAY_UINT8
+    }
+
+    /// Check if a typed array element type is float.
+    /// Only valid when `is_typed_array()` returns true.
+    #[inline]
+    #[must_use]
+    pub const fn typed_array_is_float(code: u8) -> bool {
+        code == TYPED_ARRAY_FLOAT32 || code == TYPED_ARRAY_FLOAT64
+    }
+
     /// Check if a type code is reserved
     #[inline]
     #[must_use]
     pub const fn is_reserved(code: u8) -> bool {
-        code == RESERVED_C9 || (code >= 0xe8 && code <= 0xfb)
+        code >= 0xbb && code <= 0xf4
     }
 }
 
@@ -443,17 +499,42 @@ mod tests {
     #[test]
     fn test_short_string_range() {
         assert!(is_short_string(STRING0));
-        assert!(is_short_string(STRING15));
-        assert!(!is_short_string(0xcf)); // true
-        assert!(!is_short_string(0xe0)); // uint8
+        assert!(is_short_string(STRING_MAX));
+        assert!(!is_short_string(0x64)); // small int 100
+        assert!(!is_short_string(0xa8)); // uint8
+    }
+
+    #[test]
+    fn test_small_int_range() {
+        assert!(is_small_int(0x00)); // 0
+        assert!(is_small_int(0x64)); // 100
+        assert!(!is_small_int(0x65)); // string0
+        assert_eq!(small_int_value(0x00), 0);
+        assert_eq!(small_int_value(0x64), 100);
+        assert_eq!(small_int_value(0x2a), 42);
+        assert_eq!(small_int_code(0), 0x00);
+        assert_eq!(small_int_code(100), 0x64);
     }
 
     #[test]
     fn test_reserved() {
-        assert!(is_reserved(RESERVED_C9));
-        assert!(is_reserved(0xe8));
-        assert!(is_reserved(0xfb));
-        assert!(!is_reserved(0xe0)); // uint8
-        assert!(!is_reserved(0xfc)); // array
+        assert!(is_reserved(0xbb));
+        assert!(is_reserved(0xf4));
+        assert!(!is_reserved(0xba)); // record instance
+        assert!(!is_reserved(0xf5)); // typed array
+    }
+
+    #[test]
+    fn test_typed_array() {
+        assert!(is_typed_array(TYPED_ARRAY_FLOAT64));
+        assert!(is_typed_array(TYPED_ARRAY_UINT8));
+        assert!(!is_typed_array(0xf4)); // reserved
+        assert!(!is_typed_array(0xff)); // string_long
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_FLOAT64), 8);
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_FLOAT32), 4);
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_SINT64), 8);
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_SINT8), 1);
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_UINT8), 1);
+        assert_eq!(typed_array_element_size(TYPED_ARRAY_UINT16), 2);
     }
 }

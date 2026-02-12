@@ -911,6 +911,11 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         return Err(format!("{}: skipped (unsupported requirement)", name));
     }
 
+    // Skip tests with conversion errors (broken input_bytes from spec format migration)
+    if test.get("_convert_error").is_some() {
+        return Err(format!("{}: skipped (conversion error in test data)", name));
+    }
+
     // Check for options
     let mut encoder_config = serde_bonjson::EncoderConfig::default();
     let config = if let Some(options) = test.get("options") {

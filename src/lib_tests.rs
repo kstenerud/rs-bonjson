@@ -79,15 +79,15 @@ fn test_value_roundtrip() {
 #[test]
 fn test_decode_spec_example() {
     // Example: {"number": 50}
-    // - object: 0xfd
-    // - "number" (6 chars): 0xd6 + bytes
-    // - 50 as small int: 50 + 100 = 150 = 0x96
-    // - end marker: 0xfe
+    // - object: 0xb8
+    // - "number" (6 chars): 0x65 + 6 = 0x6b + bytes
+    // - 50 as small int: value = code, so 50 = 0x32
+    // - end marker: 0xb6
     let bytes = vec![
-        0xfd, // object
-        0xd6, b'n', b'u', b'm', b'b', b'e', b'r', // "number"
-        0x96, // 50
-        0xfe, // end marker
+        0xb8, // object
+        0x6b, b'n', b'u', b'm', b'b', b'e', b'r', // "number"
+        0x32, // 50
+        0xb6, // end marker
     ];
 
     let value = decode_value(&bytes).unwrap();

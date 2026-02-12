@@ -18,27 +18,27 @@ fn serialize<T: Serialize>(value: &T) -> Vec<u8> {
 
 #[test]
 fn test_serialize_primitives() {
-    // true: 0xcf, false: 0xce
-    assert_eq!(serialize(&true), vec![0xcf]);
-    assert_eq!(serialize(&false), vec![0xce]);
-    // 42 as small int: 42 + 100 = 142 = 0x8e
-    assert_eq!(serialize(&42i32), vec![0x8e]);
-    // "hello" (5 chars): 0xd5 + bytes
-    assert_eq!(serialize(&"hello"), vec![0xd5, b'h', b'e', b'l', b'l', b'o']);
+    // true: 0xb5, false: 0xb4
+    assert_eq!(serialize(&true), vec![0xb5]);
+    assert_eq!(serialize(&false), vec![0xb4]);
+    // 42 as small int: 42 = 0x2a
+    assert_eq!(serialize(&42i32), vec![0x2a]);
+    // "hello" (5 chars): 0x6a + bytes
+    assert_eq!(serialize(&"hello"), vec![0x6a, b'h', b'e', b'l', b'l', b'o']);
 }
 
 #[test]
 fn test_serialize_option() {
-    // null: 0xcd
-    assert_eq!(serialize(&None::<i32>), vec![0xcd]);
-    // 42 as small int: 0x8e
-    assert_eq!(serialize(&Some(42i32)), vec![0x8e]);
+    // null: 0xb3
+    assert_eq!(serialize(&None::<i32>), vec![0xb3]);
+    // 42 as small int: 0x2a
+    assert_eq!(serialize(&Some(42i32)), vec![0x2a]);
 }
 
 #[test]
 fn test_serialize_vec() {
-    // [1, 2, 3]: FC + elements + FE
-    assert_eq!(serialize(&vec![1, 2, 3]), vec![0xfc, 0x65, 0x66, 0x67, 0xfe]);
+    // [1, 2, 3]: 0xb7 + elements + 0xb6
+    assert_eq!(serialize(&vec![1, 2, 3]), vec![0xb7, 0x01, 0x02, 0x03, 0xb6]);
 }
 
 #[test]
@@ -51,10 +51,10 @@ fn test_serialize_struct() {
 
     let p = Point { x: 1, y: 2 };
     let bytes = serialize(&p);
-    // {"x": 1, "y": 2}: FD + "x" + 1 + "y" + 2 + FE
-    // "x": 0xd1 0x78, "y": 0xd1 0x79
+    // {"x": 1, "y": 2}: 0xb8 + "x" + 1 + "y" + 2 + 0xb6
+    // "x": 0x66 0x78, "y": 0x66 0x79
     assert_eq!(
         bytes,
-        vec![0xfd, 0xd1, b'x', 0x65, 0xd1, b'y', 0x66, 0xfe]
+        vec![0xb8, 0x66, b'x', 0x01, 0x66, b'y', 0x02, 0xb6]
     );
 }

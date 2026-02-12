@@ -36,6 +36,7 @@ impl<'de> Deserializer<'de> {
 pub fn from_slice<'de, T: Deserialize<'de>>(data: &'de [u8]) -> Result<T> {
     let mut de = Deserializer::from_slice(data);
     de.decoder.check_document_size()?;
+    de.decoder.read_record_definitions()?;
     let value = T::deserialize(&mut de)?;
     de.decoder.finish()?;
     Ok(value)
@@ -48,6 +49,7 @@ pub fn from_slice_with_config<'de, T: Deserialize<'de>>(
 ) -> Result<T> {
     let mut de = Deserializer::from_slice_with_config(data, config);
     de.decoder.check_document_size()?;
+    de.decoder.read_record_definitions()?;
     let value = T::deserialize(&mut de)?;
     de.decoder.finish()?;
     Ok(value)
@@ -82,6 +84,15 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
             }
             DecodedValue::ObjectStart => {
                 let map = MapDeserializer::new(self);
+                visitor.visit_map(map)
+            }
+            DecodedValue::TypedArrayStart { element_type_code, count } => {
+                let seq = TypedArraySeqDeserializer::new(self, element_type_code, count);
+                visitor.visit_seq(seq)
+            }
+            DecodedValue::RecordInstanceStart(def_index) => {
+                let keys = self.decoder.record_definitions()[def_index].clone();
+                let map = RecordMapDeserializer::new(self, keys);
                 visitor.visit_map(map)
             }
             DecodedValue::ContainerEnd => Err(Error::UnbalancedContainers),
@@ -152,6 +163,23 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     fn deserialize_bytes<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
         use crate::types::type_code;
 
+        let tc = self.decoder.peek_type_code()?;
+
+        // Support typed uint8 arrays for byte buffers
+        if type_code::is_typed_array(tc) && tc == type_code::TYPED_ARRAY_UINT8 {
+            self.decoder.skip_byte();
+            let remaining = self.decoder.remaining();
+            let (count_raw, consumed) = crate::types::leb128_decode(remaining)
+                .ok_or(Error::Truncated)?;
+            for _ in 0..consumed { self.decoder.skip_byte(); }
+            let count = count_raw as usize;
+            let mut bytes = Vec::with_capacity(count);
+            for _ in 0..count {
+                bytes.push(self.decoder.read_byte_unchecked());
+            }
+            return visitor.visit_bytes(&bytes);
+        }
+
         self.decoder.expect_array_start()?;
         let mut bytes = Vec::new();
         loop {
@@ -161,12 +189,8 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
             let tc = self.decoder.peek_type_code()?;
             if type_code::is_small_int(tc) {
                 let val = type_code::small_int_value(tc);
-                if val < 0 {
-                    return Err(Error::Custom("expected byte array".into()));
-                }
                 self.decoder.skip_byte();
-                #[allow(clippy::cast_sign_loss)]
-                bytes.push(val as u8);
+                bytes.push(val);
             } else if tc == type_code::UINT8 {
                 self.decoder.skip_byte();
                 let b = self.decoder.read_byte_unchecked();
@@ -217,6 +241,18 @@ impl<'de> de::Deserializer<'de> for &mut Deserializer<'de> {
     }
 
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value> {
+        let tc = self.decoder.peek_type_code()?;
+        if crate::types::type_code::is_typed_array(tc) {
+            // Consume the type code and read count
+            self.decoder.skip_byte();
+            let remaining = self.decoder.remaining();
+            let (count_raw, consumed) = crate::types::leb128_decode(remaining)
+                .ok_or(Error::Truncated)?;
+            for _ in 0..consumed { self.decoder.skip_byte(); }
+            let count = count_raw as usize;
+            let seq = TypedArraySeqDeserializer::new_without_container(self, tc, count);
+            return visitor.visit_seq(seq);
+        }
         self.decoder.expect_array_start()?;
         let seq = SeqDeserializer::new(self);
         visitor.visit_seq(seq)
@@ -328,6 +364,89 @@ impl<'de> MapAccess<'de> for MapDeserializer<'_, 'de> {
     }
 
     fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
+        seed.deserialize(&mut *self.de)
+    }
+}
+
+struct TypedArraySeqDeserializer<'a, 'de> {
+    de: &'a mut Deserializer<'de>,
+    element_type_code: u8,
+    remaining: usize,
+    has_container: bool,
+}
+
+impl<'a, 'de> TypedArraySeqDeserializer<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>, element_type_code: u8, count: usize) -> Self {
+        TypedArraySeqDeserializer { de, element_type_code, remaining: count, has_container: true }
+    }
+
+    fn new_without_container(de: &'a mut Deserializer<'de>, element_type_code: u8, count: usize) -> Self {
+        TypedArraySeqDeserializer { de, element_type_code, remaining: count, has_container: false }
+    }
+}
+
+impl<'de> SeqAccess<'de> for TypedArraySeqDeserializer<'_, 'de> {
+    type Error = Error;
+
+    fn next_element_seed<T: DeserializeSeed<'de>>(
+        &mut self,
+        seed: T,
+    ) -> Result<Option<T::Value>> {
+        if self.remaining == 0 {
+            if self.has_container {
+                self.de.decoder.end_typed_array()?;
+            }
+            return Ok(None);
+        }
+        self.remaining -= 1;
+        // Read the element and deserialize it inline
+        let elem = self.de.decoder.read_typed_array_element(self.element_type_code)?;
+        let value = match elem {
+            DecodedValue::Int(n) => seed.deserialize(serde::de::value::I64Deserializer::new(n)),
+            DecodedValue::UInt(n) => seed.deserialize(serde::de::value::U64Deserializer::new(n)),
+            DecodedValue::Float(f) => seed.deserialize(serde::de::value::F64Deserializer::new(f)),
+            _ => unreachable!(),
+        }.map_err(|_: serde::de::value::Error| Error::Custom("typed array element deserialization failed".into()))?;
+        Ok(Some(value))
+    }
+}
+
+struct RecordMapDeserializer<'a, 'de> {
+    de: &'a mut Deserializer<'de>,
+    keys: Vec<String>,
+    index: usize,
+    serving_key: bool,
+}
+
+impl<'a, 'de> RecordMapDeserializer<'a, 'de> {
+    fn new(de: &'a mut Deserializer<'de>, keys: Vec<String>) -> Self {
+        RecordMapDeserializer { de, keys, index: 0, serving_key: true }
+    }
+}
+
+impl<'de> MapAccess<'de> for RecordMapDeserializer<'_, 'de> {
+    type Error = Error;
+
+    fn next_key_seed<K: DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
+        // Check if we hit container end (fewer values than keys)
+        if self.de.decoder.try_consume_container_end()? {
+            return Ok(None);
+        }
+        if self.index >= self.keys.len() {
+            // Consume remaining values + end marker
+            self.de.decoder.try_consume_container_end()?;
+            return Ok(None);
+        }
+        let key = &self.keys[self.index];
+        self.serving_key = false;
+        seed.deserialize(serde::de::value::StrDeserializer::new(key))
+            .map(Some)
+            .map_err(|_: serde::de::value::Error| Error::Custom("record key deserialization failed".into()))
+    }
+
+    fn next_value_seed<V: DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
+        self.index += 1;
+        self.serving_key = true;
         seed.deserialize(&mut *self.de)
     }
 }
