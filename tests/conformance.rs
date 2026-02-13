@@ -12,7 +12,6 @@ use std::path::Path;
 /// Known option names that this test runner supports.
 const KNOWN_OPTIONS: &[&str] = &[
     "allow_nul",
-    "allow_nan_infinity",
     "allow_trailing_bytes",
     "max_depth",
     "max_container_size",
@@ -34,14 +33,11 @@ const KNOWN_ERROR_TYPES: &[&str] = &[
     "invalid_type_code",
     "invalid_utf8",
     "nul_character",
-    "nul_in_string",
     "duplicate_key",
     "unclosed_container",
     "invalid_data",
     "invalid_object_key",
     "value_out_of_range",
-    "nan_not_allowed",
-    "infinity_not_allowed",
     "max_depth_exceeded",
     "max_string_length_exceeded",
     "max_container_size_exceeded",
@@ -589,8 +585,7 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
             }
 
             // Check for unrecognized options
-            let key_lower = key.to_lowercase();
-            if !KNOWN_OPTIONS.iter().any(|k| k.to_lowercase() == key_lower) {
+            if !KNOWN_OPTIONS.contains(&key.as_str()) {
                 return Err(ValidationError::Skip(format!(
                     "unrecognized option '{}'",
                     key
@@ -599,7 +594,7 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
 
             // Validate option types
             match key.as_str() {
-                "allow_nul" | "allow_nan_infinity" | "allow_trailing_bytes" => {
+                "allow_nul" | "allow_trailing_bytes" => {
                     if !value.is_boolean() {
                         return Err(ValidationError::Structural(format!(
                             "option '{}' must be a boolean",
@@ -717,10 +712,7 @@ fn validate_options(test: &JsonValue) -> Result<(), ValidationError> {
 fn validate_expected_error(test: &JsonValue) -> Result<(), ValidationError> {
     if let Some(expected_error) = test.get("expected_error") {
         if let Some(error_str) = expected_error.as_str() {
-            let error_lower = error_str.to_lowercase();
-            if !KNOWN_ERROR_TYPES
-                .iter()
-                .any(|e| e.to_lowercase() == error_lower)
+            if !KNOWN_ERROR_TYPES.contains(&error_str)
             {
                 return Err(ValidationError::Skip(format!(
                     "unrecognized error type '{}'",
@@ -867,17 +859,14 @@ fn validate_number_markers(value: &JsonValue) -> Result<(), ValidationError> {
 }
 
 /// Features this implementation supports.
-/// Features this implementation supports.
 const SUPPORTED_FEATURES: &[&str] = &[
     "int64",
-    "encode_nul_rejection",
+    "uint64",
+    "negative_zero",
     "bignumber_exponent_lt_neg128",
     "bignumber_exponent_gt_127",
-    "nan_infinity_reject",
     "nan_infinity_stringify",
     "out_of_range_stringify",
-    "invalid_utf8_replace",
-    "invalid_utf8_delete",
 ];
 
 /// Check if this test requires unsupported features.
@@ -912,11 +901,6 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
         return Err(format!("{}: skipped (unsupported requirement)", name));
     }
 
-    // Skip tests with conversion errors (broken input_bytes from spec format migration)
-    if test.get("_convert_error").is_some() {
-        return Err(format!("{}: skipped (conversion error in test data)", name));
-    }
-
     // Check for options
     let mut encoder_config = serde_bonjson::EncoderConfig::default();
     let config = if let Some(options) = test.get("options") {
@@ -933,17 +917,10 @@ fn run_test(test: &JsonValue) -> Result<(), String> {
                 _ => config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Reject,
             }
         }
-        // Also support the boolean form
-        if let Some(allow_nan_infinity) = options.get("allow_nan_infinity").and_then(|v| v.as_bool())
-        {
-            if allow_nan_infinity {
-                config.nan_infinity_mode = serde_bonjson::NanInfinityMode::Allow;
-            }
-        }
-        // Handle duplicate_key option (can be "error", "keep_first", "keep_last")
+        // Handle duplicate_key option (can be "reject", "keep_first", "keep_last")
         if let Some(dup_key) = options.get("duplicate_key").and_then(|v| v.as_str()) {
             match dup_key {
-                "error" => config.duplicate_key_mode = DuplicateKeyMode::Error,
+                "reject" => config.duplicate_key_mode = DuplicateKeyMode::Error,
                 "keep_first" => config.duplicate_key_mode = DuplicateKeyMode::KeepFirst,
                 "keep_last" => config.duplicate_key_mode = DuplicateKeyMode::KeepLast,
                 _ => {}

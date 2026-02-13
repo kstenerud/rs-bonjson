@@ -471,6 +471,22 @@ fn maybe_nfc_normalize(_mode: decoder::UnicodeNormalization, s: String) -> Strin
     s
 }
 
+/// Check if a BigNumber's value exceeds the representable range of f64.
+fn bignumber_exceeds_f64_range(bn: &BigNumber) -> bool {
+    if bn.significand == 0 {
+        return false;
+    }
+    let exp = bn.exponent;
+    if exp > 308 {
+        return true;
+    }
+    if exp < -343 {
+        return false;
+    }
+    let value = bn.significand as f64 * 10_f64.powi(exp as i32);
+    value.is_infinite()
+}
+
 fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
     use decoder::DuplicateKeyMode;
     use decoder::NanInfinityMode;
@@ -496,14 +512,17 @@ fn decode_value_recursive(decoder: &mut Decoder<'_>) -> Result<Value> {
             Ok(Value::Float(f))
         }
         DecodedValue::BigNumber(bn) => {
+            let exceeds_f64 = bignumber_exceeds_f64_range(&bn);
             if decoder.config().out_of_range_mode == OutOfRangeMode::Stringify {
                 let exp_exceeded = (bn.exponent.unsigned_abs() as usize) > decoder.config().max_bignumber_exponent;
                 // Check magnitude byte count
                 let mag_bytes = if bn.significand == 0 { 0 } else { ((64 - bn.significand.leading_zeros()) as usize + 7) / 8 };
                 let mag_exceeded = mag_bytes > decoder.config().max_bignumber_magnitude;
-                if exp_exceeded || mag_exceeded {
+                if exp_exceeded || mag_exceeded || exceeds_f64 {
                     return Ok(Value::String(bn.to_string_notation()));
                 }
+            } else if exceeds_f64 {
+                return Err(Error::ValueOutOfRange);
             }
             Ok(Value::BigNumber(bn))
         }
