@@ -873,6 +873,7 @@ const SUPPORTED_FEATURES: &[&str] = &[
     "encode_nul_rejection",
     "bignumber_exponent_lt_neg128",
     "bignumber_exponent_gt_127",
+    "nan_infinity_reject",
     "nan_infinity_stringify",
     "out_of_range_stringify",
     "invalid_utf8_replace",
